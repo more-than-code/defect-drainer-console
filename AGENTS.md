@@ -1,0 +1,45 @@
+# defect-drainer-console
+
+**Folder:** `console/` · **Git name:** `defect-drainer-console`
+
+- Operator UI only — all data via backend HTTP (`/api`, `/evidence`, `/health`)
+- Dev proxy: Vite → `127.0.0.1:8788`
+- Cross-repo plans: `/Users/joe/workspace/defect-drainer/tasks/todo.md`
+- Local tasks: `tasks/todo.md`
+- Run: `pnpm dev` → `127.0.0.1:5173` (backend must be up)
+
+## Page composition (mo-webadmin-next)
+
+**Always** use the mo-webadmin-next listing pattern for screens whose primary UI is a table.
+
+### Listing / table screens (required)
+
+```
+ListPage
+  ├─ PageHeader (title, totalLabel, primaryAction)
+  │    ├─ optional description
+  │    └─ filters (FilterSelect, SearchField, …)  // header children only
+  ├─ ErrorState (if load error)
+  ├─ AdminDataGrid / ServerDataGrid               // primary table — not MUI Table
+  ├─ optional secondary panels (detail, toolbars)
+  └─ dialogs
+```
+
+| Primitive | Role |
+|-----------|------|
+| `ListPage` | Shell = PageBody + PageHeader + error slot |
+| `AdminDataGrid` | mo `ServerDataGrid` — Paper, bold headers, pagination |
+| `FilterSelect` / `SearchField` | Filters **inside** PageHeader children |
+| `ConfirmDialog` | Deletes / destructive confirms |
+
+**Do not:**
+
+- Build list screens with raw `<Table>` / ad-hoc card lists for the primary data set
+- Put filters outside `PageHeader` / `ListPage` filters slot
+- Skip `ListPage` for a new route that is “rows in a grid”
+
+**Reference:** `mohiguide/mo-webadmin-next` — `PageHeader` + `ServerDataGrid` (e.g. `CommentsPage`, `TasksPage`).
+
+### Non-list screens
+
+Settings / onboarding / free-form report UI may use `PageBody` + `PageHeader` without a grid.
