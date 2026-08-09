@@ -14,6 +14,7 @@ Routes:
 | `/onboarding` | **Choose or create app** (required first; stored in localStorage) |
 | `/` | **Defects** — inventory, report modal, multi-select → batch agent fix |
 | `/jobs` | **Jobs** — harness runs, logs, Create PR / Refresh PRs |
+| `/analytics` | **Analytics** — Phase A defect/prompt/job SQL charts + FTS find |
 | `/settings` | **Settings** — app repos, workspace root, agent sandbox |
 
 Talks **only** to `defect-drainer-backend` over HTTP.
