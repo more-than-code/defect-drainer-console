@@ -50,6 +50,11 @@ import { MarkdownBody } from '../components/MarkdownBody';
 import { ReportDefectDialog } from '../components/ReportDefectDialog';
 import { SearchField } from '../components/SearchField';
 import {
+  defectStatusColor,
+  defectStatusLabel,
+  defectStatusOptions,
+} from '../defectStatus';
+import {
   allTrackableMerged,
   ghStateColor,
   isTrackablePr,
@@ -71,16 +76,6 @@ function shortDefectId(id: string): string {
   const tail = parts[parts.length - 1] || '';
   const date = parts[1] || '';
   return `DEF-${date}…${tail}`;
-}
-
-function defectStatusColor(
-  status: string,
-): 'default' | 'success' | 'warning' | 'error' | 'info' {
-  if (status === 'resolved') return 'success';
-  if (status === 'in_progress') return 'info';
-  if (status === 'wontfix' || status === 'duplicate') return 'default';
-  if (status === 'open' || status === 'triaged') return 'warning';
-  return 'default';
 }
 
 function appRepoUrlText(app: AppRecord | undefined): string {
@@ -352,7 +347,7 @@ export function DefectsPage() {
         renderCell: ({ value }) => (
           <Chip
             size="small"
-            label={String(value ?? '')}
+            label={defectStatusLabel(String(value ?? ''))}
             color={defectStatusColor(String(value ?? ''))}
             variant={value === 'in_progress' ? 'filled' : 'outlined'}
             sx={{
@@ -603,17 +598,10 @@ export function DefectsPage() {
           <FilterSelect
             label="Status"
             value={status}
-            allLabel="all"
-            options={[
-              'open',
-              'triaged',
-              'in_progress',
-              'resolved',
-              'wontfix',
-              'duplicate',
-            ].map((s) => ({ value: s, label: s }))}
+            allLabel="All"
+            options={defectStatusOptions()}
             onChange={setStatus}
-            minWidth={140}
+            minWidth={150}
           />
           <SearchField
             label="Search"
@@ -626,7 +614,7 @@ export function DefectsPage() {
           <FilterSelect
             label="Severity"
             value={severity}
-            allLabel="all"
+            allLabel="All"
             options={['P0', 'P1', 'P2', 'P3'].map((s) => ({
               value: s,
               label: s,
@@ -768,7 +756,7 @@ export function DefectsPage() {
                 <Chip size="small" label={detail.severity} />
                 <Chip
                   size="small"
-                  label={detail.status}
+                  label={defectStatusLabel(detail.status)}
                   color={defectStatusColor(detail.status)}
                 />
                 {detail.surface ? (
