@@ -23,6 +23,7 @@ import { useAppContext } from '../AppContext';
 import { api } from '../api';
 import { ListPage } from '../components/ListPage';
 import { LoadingState } from '../components/LoadingState';
+import { defectStatusLabel } from '../defectStatus';
 
 type AggRow = { key: string; count: number };
 
@@ -61,12 +62,29 @@ type AnalyticsSummary = {
 
 type SearchHit = {
   id: string;
-  title: string;
-  summary: string;
-  severity: string;
-  status: string;
-  area: string;
+  artifact_type?: string;
+  app_id?: string;
+  defect_id?: string | null;
+  job_id?: string | null;
+  title?: string | null;
+  body_text?: string | null;
+  summary?: string;
+  severity?: string | null;
+  status?: string | null;
+  area?: string | null;
+  prompt_key?: string | null;
+  blob_uri?: string | null;
   snippet?: string;
+};
+
+type FacetBucket = { key: string; count: number };
+
+type SearchStatus = {
+  enabled: boolean;
+  url: string | null;
+  index: string;
+  reachable: boolean;
+  outbox: number;
 };
 
 function BarList({
@@ -119,18 +137,32 @@ export function AnalyticsPage() {
   const [error, setError] = useState('');
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [q, setQ] = useState('');
+  const [artifactType, setArtifactType] = useState('');
   const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
   const [searchMode, setSearchMode] = useState('');
+  const [searchTotal, setSearchTotal] = useState(0);
+  const [facets, setFacets] = useState<{
+    artifact_type?: FacetBucket[];
+    severity?: FacetBucket[];
+    area?: FacetBucket[];
+    status?: FacetBucket[];
+  }>({});
+  const [osStatus, setOsStatus] = useState<SearchStatus | null>(null);
+  const [osError, setOsError] = useState('');
   const [searchBusy, setSearchBusy] = useState(false);
 
   const load = useCallback(async () => {
     if (!appId) return;
     setLoading(true);
     try {
-      const res = await api<{ analytics: AnalyticsSummary }>(
-        `/api/analytics?app_id=${encodeURIComponent(appId)}`,
-      );
+      const [res, st] = await Promise.all([
+        api<{ analytics: AnalyticsSummary }>(
+          `/api/analytics?app_id=${encodeURIComponent(appId)}`,
+        ),
+        api<SearchStatus>('/api/search/status').catch(() => null),
+      ]);
       setSummary(res.analytics);
+      if (st) setOsStatus(st);
       setError('');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -146,18 +178,52 @@ export function AnalyticsPage() {
   const runSearch = useCallback(async () => {
     if (!appId) return;
     setSearchBusy(true);
+    setOsError('');
     try {
-      const res = await api<{ hits: SearchHit[]; mode: string }>(
-        `/api/search?app_id=${encodeURIComponent(appId)}&q=${encodeURIComponent(q)}&limit=30`,
-      );
+      const params = new URLSearchParams({
+        app_id: appId,
+        limit: '40',
+      });
+      if (q.trim()) params.set('q', q.trim());
+      if (artifactType) params.set('artifact_type', artifactType);
+      const res = await api<{
+        hits: SearchHit[];
+        mode: string;
+        total?: number;
+        facets?: typeof facets;
+        opensearch?: { ok?: boolean; error?: string };
+      }>(`/api/search?${params.toString()}`);
       setSearchHits(res.hits || []);
       setSearchMode(res.mode || '');
+      setSearchTotal(res.total ?? res.hits?.length ?? 0);
+      setFacets(res.facets || {});
+      if (res.opensearch && res.opensearch.ok === false && res.opensearch.error) {
+        setOsError(res.opensearch.error);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSearchBusy(false);
     }
-  }, [appId, q]);
+  }, [appId, q, artifactType]);
+
+  function hitLink(h: SearchHit): string {
+    if (h.defect_id) return `/?id=${encodeURIComponent(h.defect_id)}`;
+    if (h.job_id) return `/jobs?job=${encodeURIComponent(h.job_id)}`;
+    if (h.artifact_type === 'defect_summary' && h.id)
+      return `/?id=${encodeURIComponent(h.id.replace(/^defect_summary:/, ''))}`;
+    return '/';
+  }
+
+  function typeColor(
+    t?: string,
+  ): 'default' | 'primary' | 'secondary' | 'success' | 'info' | 'warning' {
+    if (t === 'defect_summary') return 'primary';
+    if (t === 'prompt') return 'secondary';
+    if (t === 'screenshot' || t === 'fix_evidence') return 'info';
+    if (t === 'job_summary' || t === 'job_log') return 'warning';
+    return 'default';
+  }
 
   const rate =
     summary?.jobs.success_rate != null
@@ -174,10 +240,38 @@ export function AnalyticsPage() {
       }
       description={
         <>
-          Phase A SQL analytics for <strong>{app?.name ?? 'app'}</strong>
+          Analytics for <strong>{app?.name ?? 'app'}</strong>
           {' — '}
-          defect mix, batch prompt use, harness job outcomes. Search uses FTS on
-          title/summary/body.
+          SQL KPIs (Phase A) + multi-artifact search (Phase B OpenSearch when
+          enabled, else FTS).
+          {osStatus ? (
+            <>
+              {' '}
+              Search:{' '}
+              <Chip
+                size="small"
+                label={
+                  osStatus.enabled
+                    ? osStatus.reachable
+                      ? 'OpenSearch up'
+                      : 'OpenSearch down → FTS'
+                    : 'FTS only'
+                }
+                color={
+                  osStatus.enabled && osStatus.reachable ? 'success' : 'default'
+                }
+                sx={{ height: 22, verticalAlign: 'middle' }}
+              />
+              {osStatus.outbox > 0 ? (
+                <Chip
+                  size="small"
+                  color="warning"
+                  label={`outbox ${osStatus.outbox}`}
+                  sx={{ height: 22, ml: 0.5, verticalAlign: 'middle' }}
+                />
+              ) : null}
+            </>
+          ) : null}
         </>
       }
       primaryAction={{
@@ -207,12 +301,30 @@ export function AnalyticsPage() {
           <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
             <BarList title="By severity" rows={summary.defects.by_severity} />
             <BarList title="By area" rows={summary.defects.by_area} />
-            <BarList title="By status" rows={summary.defects.by_status} />
+            <BarList
+              title="By status"
+              rows={summary.defects.by_status.map((r) => ({
+                ...r,
+                key: defectStatusLabel(r.key === '(empty)' ? '' : r.key),
+              }))}
+            />
             <BarList title="By source" rows={summary.defects.by_source} />
           </Stack>
 
           <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
-            <BarList title="By bucket" rows={summary.defects.by_bucket} />
+            <BarList
+              title="Open vs resolved"
+              rows={summary.defects.by_bucket.map((r) => ({
+                ...r,
+                // API still uses internal bucket field; show operator labels
+                key:
+                  r.key === 'open'
+                    ? 'Open'
+                    : r.key === 'resolved'
+                      ? 'Resolved'
+                      : r.key,
+              }))}
+            />
             <BarList title="By surface" rows={summary.defects.by_surface} />
             <BarList title="Jobs by status" rows={summary.jobs.by_status} />
           </Stack>
@@ -267,13 +379,13 @@ export function AnalyticsPage() {
 
           <Paper elevation={0} sx={{ p: 2, border: 1, borderColor: 'divider' }}>
             <Typography variant="subtitle2" fontWeight={700} gutterBottom>
-              Find defects
+              Multi-artifact search
             </Typography>
             <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
               <TextField
                 size="small"
                 fullWidth
-                placeholder="Search title, summary, body…"
+                placeholder="Search defects, prompts, evidence, jobs…"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 onKeyDown={(e) => {
@@ -289,14 +401,44 @@ export function AnalyticsPage() {
                 Search
               </Button>
             </Stack>
+            <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+              {(
+                [
+                  ['', 'All'],
+                  ['defect_summary', 'Defect'],
+                  ['prompt', 'Prompt'],
+                  ['screenshot', 'Screenshot'],
+                  ['fix_evidence', 'Fix evidence'],
+                  ['job_summary', 'Job'],
+                  ['job_log', 'Job log'],
+                ] as const
+              ).map(([val, label]) => (
+                <Chip
+                  key={label}
+                  size="small"
+                  label={label}
+                  color={artifactType === val ? 'primary' : 'default'}
+                  variant={artifactType === val ? 'filled' : 'outlined'}
+                  onClick={() => setArtifactType(val)}
+                  sx={{ cursor: 'pointer' }}
+                />
+              ))}
+            </Stack>
+            {facets.artifact_type?.length ? (
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+                Facets:{' '}
+                {facets.artifact_type.map((f) => `${f.key}(${f.count})`).join(' · ')}
+              </Typography>
+            ) : null}
             {searchMode ? (
               <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-                mode: {searchMode} · {searchHits.length} hit(s)
+                mode: {searchMode} · {searchTotal} hit(s)
+                {osError ? ` · OS error: ${osError.slice(0, 80)}` : ''}
               </Typography>
             ) : null}
             {!searchHits.length ? (
               <Typography variant="caption" color="text.secondary">
-                Run a query to list matching defects (FTS Phase A).
+                Run a query. With OpenSearch up: multi-type results. Otherwise Phase A defect FTS.
               </Typography>
             ) : (
               <Stack spacing={0.75}>
@@ -304,7 +446,7 @@ export function AnalyticsPage() {
                   <Box
                     key={h.id}
                     component={RouterLink}
-                    to={`/?id=${encodeURIComponent(h.id)}`}
+                    to={hitLink(h)}
                     sx={{
                       textDecoration: 'none',
                       color: 'inherit',
@@ -316,17 +458,38 @@ export function AnalyticsPage() {
                     }}
                   >
                     <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                      <Chip
+                        size="small"
+                        color={typeColor(h.artifact_type)}
+                        label={h.artifact_type || 'hit'}
+                        sx={{ height: 20 }}
+                      />
                       <Typography variant="body2" fontWeight={600}>
-                        {h.title || h.id}
+                        {h.title || h.prompt_key || h.id}
                       </Typography>
-                      <Chip size="small" label={h.severity} sx={{ height: 20 }} />
-                      <Chip size="small" variant="outlined" label={h.status} sx={{ height: 20 }} />
+                      {h.severity ? (
+                        <Chip size="small" label={h.severity} sx={{ height: 20 }} />
+                      ) : null}
+                      {h.status ? (
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          label={
+                            h.artifact_type === 'defect_summary' ||
+                            h.artifact_type === 'screenshot' ||
+                            h.artifact_type === 'fix_evidence'
+                              ? defectStatusLabel(h.status)
+                              : h.status
+                          }
+                          sx={{ height: 20 }}
+                        />
+                      ) : null}
                       {h.area ? (
                         <Chip size="small" variant="outlined" label={h.area} sx={{ height: 20 }} />
                       ) : null}
                     </Stack>
                     <Typography variant="caption" color="text.secondary" display="block">
-                      {h.snippet || h.summary || h.id}
+                      {h.snippet || h.body_text || h.summary || h.blob_uri || h.id}
                     </Typography>
                   </Box>
                 ))}
@@ -335,8 +498,10 @@ export function AnalyticsPage() {
           </Paper>
 
           <Alert severity="info" sx={{ py: 0 }}>
-            Phase A only — no OpenSearch cluster. Structured events:{' '}
-            <code>prompt_use</code>, <code>job_summary</code>, defect FTS.
+            Phase A: SQL KPIs always. Phase B: set{' '}
+            <code>DEFECT_DRAINER_OPENSEARCH_URL=http://127.0.0.1:9200</code> and{' '}
+            <code>pnpm search:up</code> in backend; then reindex via{' '}
+            <code>POST /api/search/reindex</code>.
           </Alert>
         </Stack>
       ) : null}
