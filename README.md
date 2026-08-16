@@ -34,3 +34,7 @@ cd /Users/joe/workspace/defect-drainer/console && pnpm install && pnpm dev
 
 - Umbrella: `../README.md`, `../apps/registry.json`
 - Backend: `../backend/README.md`
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
