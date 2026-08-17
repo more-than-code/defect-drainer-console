@@ -31,6 +31,7 @@ import {
   type BatchJob,
   type BatchJobPr,
   type BatchJobVerification,
+  type VerifyResult,
   type BatchRecord,
 } from '../api';
 import {
@@ -113,43 +114,93 @@ function formatMergedAt(iso: string | null | undefined): string {
  * why a defect stayed open, so the failing output must be visible here — not
  * buried in the log or in verify.json on disk.
  */
-function VerificationPanel({ v }: { v: BatchJobVerification }) {
+/** Same verdict rule as the backend's judgeVerification. */
+function verdictOf(
+  r: VerifyResult,
+  baseline: BatchJobVerification | undefined,
+): 'pass' | 'regression' | 'pre-existing' | 'blocked' {
+  if (r.ok) return 'pass';
+  if (r.skipped_reason) return 'blocked';
+  if (!baseline?.ran) return 'blocked';
+  const before = baseline.results.find(
+    (b) => b.repo === r.repo && b.command === r.command,
+  );
+  if (!before || before.skipped_reason) return 'blocked';
+  return before.ok ? 'regression' : 'pre-existing';
+}
+
+function VerificationPanel({
+  v,
+  baseline,
+}: {
+  v: BatchJobVerification;
+  baseline?: BatchJobVerification;
+}) {
   const passed = v.results.filter((r) => r.ok).length;
+  const verdicts = v.results.map((r) => verdictOf(r, baseline));
+  const regressions = verdicts.filter((x) => x === 'regression').length;
+  const blocked = verdicts.filter((x) => x === 'blocked').length;
+  const preExisting = verdicts.filter((x) => x === 'pre-existing').length;
+  const gateOk = regressions === 0 && blocked === 0;
   return (
     <Stack spacing={0.75}>
       <Stack direction="row" spacing={1} alignItems="center">
         <Typography variant="subtitle2">Verification</Typography>
         <Chip
           size="small"
-          color={v.ok ? 'success' : 'error'}
+          color={gateOk ? 'success' : 'error'}
           label={
-            v.ok
-              ? `${passed}/${v.results.length} passed`
-              : `${passed}/${v.results.length} passed — defect kept open`
+            gateOk
+              ? `${passed}/${v.results.length} passed${
+                  preExisting ? ` · ${preExisting} already failing` : ''
+                }`
+              : `${
+                  regressions ? `${regressions} broken by this job` : ''
+                }${regressions && blocked ? ' · ' : ''}${
+                  blocked ? `${blocked} could not run` : ''
+                } — defect kept open`
           }
         />
+        {preExisting && !gateOk ? (
+          <Chip
+            size="small"
+            variant="outlined"
+            label={`${preExisting} already failing before this job`}
+          />
+        ) : null}
       </Stack>
-      {v.results.map((r, i) => (
+      {v.results.map((r, i) => {
+        const verdict = verdicts[i]!;
+        const blocking = verdict === 'regression' || verdict === 'blocked';
+        return (
         <Box
           key={`${r.repo}-${i}`}
           sx={{
             p: 1,
             borderRadius: 1,
             border: 1,
-            borderColor: r.ok ? 'divider' : 'error.main',
+            borderColor: blocking ? 'error.main' : 'divider',
             bgcolor: 'background.default',
           }}
         >
           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
             <Chip
               size="small"
-              color={r.ok ? 'success' : 'error'}
+              color={
+                verdict === 'pass'
+                  ? 'success'
+                  : verdict === 'pre-existing'
+                    ? 'default'
+                    : 'error'
+              }
               label={
                 r.skipped_reason
-                  ? 'skipped'
-                  : r.ok
+                  ? 'could not run'
+                  : verdict === 'pass'
                     ? 'pass'
-                    : `exit ${r.exit_code ?? r.signal ?? 'killed'}`
+                    : verdict === 'pre-existing'
+                      ? `already failing (exit ${r.exit_code ?? '?'})`
+                      : `broke it (exit ${r.exit_code ?? r.signal ?? 'killed'})`
               }
             />
             <Typography variant="body2" sx={{ fontWeight: 500 }}>
@@ -189,7 +240,8 @@ function VerificationPanel({ v }: { v: BatchJobVerification }) {
             </Box>
           ) : null}
         </Box>
-      ))}
+        );
+      })}
     </Stack>
   );
 }
@@ -1137,7 +1189,10 @@ export function JobsPage() {
                 </Stack>
               ) : null}
               {detailJob.verification?.ran ? (
-                <VerificationPanel v={detailJob.verification} />
+                <VerificationPanel
+                  v={detailJob.verification}
+                  baseline={detailJob.baseline}
+                />
               ) : null}
               <Box
                 ref={logBoxRef}

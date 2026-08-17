@@ -138,6 +138,8 @@ export type BatchJob = {
   }>;
   prs?: BatchJobPr[];
   verification?: BatchJobVerification;
+  /** Same commands run before the agent, so pre-existing red is attributable. */
+  baseline?: BatchJobVerification;
 };
 
 /** One operator-defined check DD re-ran after the fix session. */
