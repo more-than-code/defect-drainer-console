@@ -31,6 +31,8 @@ import {
   type BatchJob,
   type BatchJobPr,
   type BatchJobVerification,
+  type DiffHunk,
+  type DiffHunksResponse,
   type DiffHygieneReport,
   type VerifyResult,
   type BatchRecord,
@@ -130,13 +132,72 @@ function verdictOf(
   return before.ok ? 'regression' : 'pre-existing';
 }
 
+/** Monospace hunk view: removals then additions, coloured like a diff. */
+function HunkView({ h }: { h: DiffHunk }) {
+  return (
+    <Box
+      sx={{
+        mt: 0.75,
+        p: 1,
+        borderRadius: 1,
+        bgcolor: 'action.hover',
+        fontSize: 11,
+        fontFamily: 'ui-monospace, Menlo, monospace',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-all',
+      }}
+    >
+      <Box sx={{ color: 'text.secondary' }}>
+        {h.file} {h.header}
+      </Box>
+      {h.removed.map((l, i) => (
+        <Box key={`r${i}`} sx={{ color: 'error.main' }}>{`- ${l}`}</Box>
+      ))}
+      {h.added.map((l, i) => (
+        <Box key={`a${i}`} sx={{ color: 'success.main' }}>{`+ ${l}`}</Box>
+      ))}
+    </Box>
+  );
+}
+
 /**
  * Advisory: reformatting is messy, not wrong, so it never blocks a resolve —
- * but a diff that is mostly reflow hides the real change from review.
+ * but a diff that is mostly reflow hides the real change from review. The
+ * hunks are fetched on demand; diffs are not stored on the job.
  */
-function DiffHygienePanel({ d }: { d: DiffHygieneReport }) {
+function DiffHygienePanel({
+  d,
+  jobId,
+}: {
+  d: DiffHygieneReport;
+  jobId: string;
+}) {
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [data, setData] = useState<Record<string, DiffHunksResponse>>({});
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [err, setErr] = useState<Record<string, string>>({});
+
   const rows = d.repos.filter((r) => r.changedLines > 0 || r.error);
   if (!rows.length) return null;
+
+  async function toggle(repo: string) {
+    const next = !open[repo];
+    setOpen((p) => ({ ...p, [repo]: next }));
+    if (!next || data[repo] || busy[repo]) return;
+    setBusy((p) => ({ ...p, [repo]: true }));
+    try {
+      const res = await api<DiffHunksResponse>(
+        `/api/batch-jobs/${encodeURIComponent(jobId)}/diff/${encodeURIComponent(repo)}?kind=reflow`,
+      );
+      setData((p) => ({ ...p, [repo]: res }));
+      setErr((p) => ({ ...p, [repo]: '' }));
+    } catch (e) {
+      setErr((p) => ({ ...p, [repo]: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setBusy((p) => ({ ...p, [repo]: false }));
+    }
+  }
+
   return (
     <Stack spacing={0.5}>
       <Stack direction="row" spacing={1} alignItems="center">
@@ -146,26 +207,50 @@ function DiffHygienePanel({ d }: { d: DiffHygieneReport }) {
         ) : null}
       </Stack>
       {rows.map((r) => (
-        <Typography
-          key={r.repo}
-          variant="body2"
-          color={
-            r.error
-              ? 'text.secondary'
-              : r.formattingOnlyLines
-                ? 'warning.main'
-                : 'text.secondary'
-          }
-        >
-          {r.error
-            ? `${r.repo}: ${r.error}`
-            : `${r.repo}: ${r.changedLines} lines across ${r.filesChanged} file(s)` +
-              (r.formattingOnlyLines
-                ? ` — ${r.formattingOnlyLines} reformatting only (${r.formattingOnlyHunks}/${r.hunks} hunks, ${Math.round(
-                    r.formattingRatio * 100,
-                  )}%)`
-                : ' — no reformatting noise')}
-        </Typography>
+        <Box key={r.repo}>
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+            <Typography
+              variant="body2"
+              color={r.error ? 'text.secondary' : r.formattingOnlyLines ? 'warning.main' : 'text.secondary'}
+            >
+              {r.error
+                ? `${r.repo}: ${r.error}`
+                : `${r.repo}: ${r.changedLines} lines across ${r.filesChanged} file(s)` +
+                  (r.formattingOnlyLines
+                    ? ` — ${r.formattingOnlyLines} reformatting only (${r.formattingOnlyHunks}/${r.hunks} hunks, ${Math.round(
+                        r.formattingRatio * 100,
+                      )}%)`
+                    : ' — no reformatting noise')}
+            </Typography>
+            {!r.error && r.formattingOnlyHunks > 0 ? (
+              <Button size="small" onClick={() => void toggle(r.repo)}>
+                {open[r.repo] ? 'Hide' : `Show ${r.formattingOnlyHunks} reformatting hunk(s)`}
+              </Button>
+            ) : null}
+          </Stack>
+          {open[r.repo] ? (
+            <Box sx={{ pl: 1, maxHeight: 380, overflow: 'auto' }}>
+              {busy[r.repo] ? (
+                <Typography variant="caption">loading…</Typography>
+              ) : err[r.repo] ? (
+                <Typography variant="caption" color="error.main">
+                  {err[r.repo]}
+                </Typography>
+              ) : (
+                <>
+                  {(data[r.repo]?.hunks ?? []).map((h, i) => (
+                    <HunkView key={`${h.file}-${i}`} h={h} />
+                  ))}
+                  {data[r.repo]?.truncated ? (
+                    <Typography variant="caption" color="text.secondary">
+                      showing {data[r.repo]!.hunks.length} of {data[r.repo]!.total}
+                    </Typography>
+                  ) : null}
+                </>
+              )}
+            </Box>
+          ) : null}
+        </Box>
       ))}
     </Stack>
   );
@@ -1237,7 +1322,10 @@ export function JobsPage() {
                 />
               ) : null}
               {detailJob.diffHygiene ? (
-                <DiffHygienePanel d={detailJob.diffHygiene} />
+                <DiffHygienePanel
+                  d={detailJob.diffHygiene}
+                  jobId={detailJob.jobId}
+                />
               ) : null}
               <Box
                 ref={logBoxRef}

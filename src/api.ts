@@ -171,6 +171,23 @@ export type RepoDiffHygiene = {
 
 export type DiffHygieneReport = { repos: RepoDiffHygiene[]; noisy: boolean };
 
+/** One hunk from the drill-down endpoint. */
+export type DiffHunk = {
+  file: string;
+  header: string;
+  removed: string[];
+  added: string[];
+  reflow: boolean;
+};
+
+export type DiffHunksResponse = {
+  repo: string;
+  kind: 'reflow' | 'all';
+  hunks: DiffHunk[];
+  total: number;
+  truncated: boolean;
+};
+
 export type BatchJobVerification = {
   ran: boolean;
   ok: boolean;
