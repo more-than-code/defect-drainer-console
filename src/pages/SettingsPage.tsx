@@ -1,4 +1,6 @@
 import AddIcon from '@mui/icons-material/Add';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import Autocomplete from '@mui/material/Autocomplete';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import FolderOpenOutlinedIcon from '@mui/icons-material/FolderOpenOutlined';
 import SaveIcon from '@mui/icons-material/Save';
@@ -16,6 +18,7 @@ import MenuItem from '@mui/material/MenuItem';
 import Paper from '@mui/material/Paper';
 import Select from '@mui/material/Select';
 import Stack from '@mui/material/Stack';
+import Tooltip from '@mui/material/Tooltip';
 import Switch from '@mui/material/Switch';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
@@ -28,6 +31,8 @@ import {
   listRepoBranches,
   type AppRecord,
   type AppRepoEntry,
+  type AgentToolchain,
+  type VerifyCommand,
   type GrokSandboxProfile,
 } from '../api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -52,6 +57,23 @@ type BranchLoad = {
   current?: string;
   error: string;
 };
+
+/**
+ * Starting points for the Command field — an editable combo, not a fixed list:
+ * the right command is repo-specific and DD cannot know it. Two properties
+ * matter — non-zero exit on failure, and runnable unattended (so no dev server
+ * or browser).
+ */
+const VERIFY_COMMAND_SUGGESTIONS = [
+  'fvm flutter test',
+  'fvm flutter analyze --no-fatal-infos --no-fatal-warnings',
+  'pnpm test',
+  'pnpm check',
+  'pnpm lint',
+  'npm test',
+  'cargo test',
+  'go test ./...',
+];
 
 const BASE_SOURCES = [
   { value: 'origin' as const, label: 'GitHub' },
@@ -118,6 +140,9 @@ export function SettingsPage() {
   const [repoRows, setRepoRows] = useState<RepoRow[]>([emptyRow()]);
   const [grokSandbox, setGrokSandbox] =
     useState<GrokSandboxProfile>('strict');
+  const [agentToolchain, setAgentToolchain] = useState<AgentToolchain>('none');
+  const [allowSimulatorWrites, setAllowSimulatorWrites] = useState(false);
+  const [verifyCommands, setVerifyCommands] = useState<VerifyCommand[]>([]);
   const [workspaceRoot, setWorkspaceRoot] = useState('');
   const [branchLoads, setBranchLoads] = useState<Record<number, BranchLoad>>(
     {},
@@ -135,6 +160,9 @@ export function SettingsPage() {
     setGrokSandbox(
       app.grok_sandbox === 'workspace' ? 'workspace' : 'strict',
     );
+    setAgentToolchain(app.agent_toolchain === 'flutter' ? 'flutter' : 'none');
+    setAllowSimulatorWrites(!!app.allow_simulator_writes);
+    setVerifyCommands(app.verify_commands ?? []);
     setWorkspaceRoot(app.workspace_root || '');
     setIsDefault(!!app.default);
   }, []);
@@ -193,6 +221,44 @@ export function SettingsPage() {
       setPickingIndex(null);
     }
   }
+
+  // Verification rows target a worktree by repo NAME; anything else is skipped
+  // at run time, so offer only names this app actually has.
+  const repoNames = repoRows
+    .map((r) => r.name.trim())
+    .filter((n, i, all) => n && all.indexOf(n) === i);
+
+  // One group per configured repository (from Repositories above), always
+  // shown even with no commands yet, so adding is per-repo rather than
+  // "add a row, then remember which repo it belongs to". Rows whose repo is
+  // stale or blank get their own trailing groups so nothing is hidden.
+  // Display only: the saved order is the execution order.
+  const verifyGroups = (() => {
+    const byRepo = new Map<string, Array<{ vc: VerifyCommand; i: number }>>();
+    verifyCommands.forEach((vc, i) => {
+      const key = vc.repo || '';
+      if (!byRepo.has(key)) byRepo.set(key, []);
+      byRepo.get(key)!.push({ vc, i });
+    });
+    const groups = repoNames.map((repo) => ({
+      key: repo,
+      repo,
+      label: repo,
+      known: true,
+      rows: byRepo.get(repo) ?? [],
+    }));
+    for (const [repo, rows] of byRepo) {
+      if (repoNames.includes(repo)) continue;
+      groups.push({
+        key: repo || '__unassigned__',
+        repo,
+        label: repo || 'Unassigned',
+        known: false,
+        rows,
+      });
+    }
+    return groups;
+  })();
 
   const branchKey = repoRows
     .map((r) => `${r.source}\0${r.url.trim()}`)
@@ -291,6 +357,11 @@ export function SettingsPage() {
           description,
           repo_entries,
           grok_sandbox: grokSandbox,
+          agent_toolchain: agentToolchain,
+          allow_simulator_writes: allowSimulatorWrites,
+          verify_commands: verifyCommands.filter(
+            (v) => v.repo.trim() && v.command.trim(),
+          ),
           default: isDefault,
         }),
       });
@@ -554,6 +625,185 @@ export function SettingsPage() {
                 : 'Maximum isolation: no reliable Simulator access. Operator can upload fix evidence in the console.'}
             </FormHelperText>
           </FormControl>
+
+          <FormControl size="small" fullWidth>
+            <InputLabel id="agent-toolchain-label">Agent toolchain</InputLabel>
+            <Select
+              labelId="agent-toolchain-label"
+              label="Agent toolchain"
+              value={agentToolchain}
+              onChange={(e) =>
+                setAgentToolchain(e.target.value as AgentToolchain)
+              }
+            >
+              <MenuItem value="none">
+                None — agent finds its own tools
+              </MenuItem>
+              <MenuItem value="flutter">
+                Flutter — clone the repo&apos;s pinned SDK into the job
+              </MenuItem>
+            </Select>
+            <FormHelperText>
+              {agentToolchain === 'flutter'
+                ? "Reads the .fvmrc pin and clones that SDK into the job handoff, where the sandbox can write. Lets the agent run the project's real tests instead of improvising an SDK. Needs the pinned version installed on the host (fvm install); skipped with a warning if it is missing."
+                : 'Agent must locate a toolchain itself. Under a write-confined sandbox it usually cannot run the project test suite, so fix evidence tends to be weaker.'}
+            </FormHelperText>
+          </FormControl>
+
+          <FormControl size="small" fullWidth>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={allowSimulatorWrites}
+                  onChange={(e) => setAllowSimulatorWrites(e.target.checked)}
+                />
+              }
+              label="Allow Simulator writes"
+            />
+            <FormHelperText>
+              {allowSimulatorWrites
+                ? 'Job-scoped sandbox profile grants write access to the iOS Simulator device tree, so the agent can install and screenshot the real app instead of rendering widgets. Nothing else on the host becomes writable.'
+                : 'Off: the agent can read Simulator data but not install apps, so visual proof falls back to widget renders. Turn on only for apps whose defects need real on-device screenshots.'}
+            </FormHelperText>
+          </FormControl>
+
+          <Box>
+            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+              Verification commands
+            </Typography>
+            <FormHelperText sx={{ mt: 0, mb: 1.5 }}>
+              Defect Drainer re-runs these itself in the worktree after a fix
+              job. Every one must exit 0 or the defect stays open, no matter
+              what the agent reports. Leave empty to resolve on fix evidence
+              alone (previous behaviour). Authored here, never by the agent —
+              the runner is not sandboxed.
+            </FormHelperText>
+            {verifyGroups.map((group) => (
+              <Box key={group.key} sx={{ mb: 1.5 }}>
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  alignItems="center"
+                  sx={{ mb: 0.5 }}
+                >
+                  <Typography
+                    variant="body2"
+                    sx={{ fontWeight: 600 }}
+                    color={group.known ? 'text.primary' : 'error.main'}
+                  >
+                    {group.label}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {group.rows.length === 0
+                      ? 'no commands — nothing enforced for this repo'
+                      : `${group.rows.length} ${
+                          group.rows.length === 1 ? 'command' : 'commands'
+                        }`}
+                    {group.known ? '' : ' — no such repo, would be skipped'}
+                  </Typography>
+                </Stack>
+                <Stack spacing={1}>
+                  {group.rows.map(({ vc, i }) => (
+                    <Stack key={i} direction="row" spacing={1}>
+                      {/* The group heading already names the repo, so the
+                          per-row picker only appears where it is actionable:
+                          a stale or blank repo the operator must reassign. */}
+                      {group.known ? null : (
+                        <TextField
+                          select
+                          size="small"
+                          label="Move to repo"
+                          value={vc.repo}
+                          error={!!vc.repo && !repoNames.includes(vc.repo)}
+                          onChange={(e) =>
+                            setVerifyCommands((prev) =>
+                              prev.map((v, idx) =>
+                                idx === i ? { ...v, repo: e.target.value } : v,
+                              ),
+                            )
+                          }
+                          sx={{ width: 200 }}
+                        >
+                          {(vc.repo && !repoNames.includes(vc.repo)
+                            ? [vc.repo, ...repoNames]
+                            : repoNames
+                          ).map((n) => (
+                            <MenuItem key={n} value={n}>
+                              {n}
+                            </MenuItem>
+                          ))}
+                        </TextField>
+                      )}
+                      <Autocomplete
+                        freeSolo
+                        fullWidth
+                        options={VERIFY_COMMAND_SUGGESTIONS}
+                        value={vc.command}
+                        onInputChange={(_, val) =>
+                          setVerifyCommands((prev) =>
+                            prev.map((v, idx) =>
+                              idx === i ? { ...v, command: val } : v,
+                            ),
+                          )
+                        }
+                        renderInput={(params) => (
+                          <TextField
+                            {...params}
+                            size="small"
+                            label="Command"
+                            placeholder="pick a common one, or type your own"
+                          />
+                        )}
+                      />
+                      <Tooltip title="Duplicate">
+                        <IconButton
+                          aria-label={`Duplicate command for ${vc.repo || 'unassigned'}`}
+                          onClick={() =>
+                            setVerifyCommands((prev) => [
+                              ...prev.slice(0, i + 1),
+                              { ...prev[i]! },
+                              ...prev.slice(i + 1),
+                            ])
+                          }
+                        >
+                          <ContentCopyIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <IconButton
+                        aria-label="Remove verification command"
+                        onClick={() =>
+                          setVerifyCommands((prev) =>
+                            prev.filter((_, idx) => idx !== i),
+                          )
+                        }
+                      >
+                        <DeleteOutlineIcon />
+                      </IconButton>
+                    </Stack>
+                  ))}
+                </Stack>
+                <Button
+                  startIcon={<AddIcon />}
+                  size="small"
+                  sx={{ mt: 0.5 }}
+                  onClick={() =>
+                    setVerifyCommands((prev) => [
+                      ...prev,
+                      { repo: group.repo, command: '' },
+                    ])
+                  }
+                >
+                  Add to {group.label}
+                </Button>
+              </Box>
+            ))}
+            {repoNames.length === 0 ? (
+              <FormHelperText>
+                Add a repository above first — verification commands run inside
+                a repo's worktree.
+              </FormHelperText>
+            ) : null}
+          </Box>
 
           <FormControlLabel
             control={

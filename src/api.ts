@@ -10,6 +10,12 @@ export type AppRepoEntry = {
 /** Agent sandbox profile for this app (App Settings). API field: grok_sandbox. */
 export type GrokSandboxProfile = 'strict' | 'workspace';
 
+/** Toolchain DD pre-provisions into the job handoff. API field: agent_toolchain. */
+export type AgentToolchain = 'none' | 'flutter';
+
+/** Operator-defined check DD re-runs in a worktree after a fix job. */
+export type VerifyCommand = { repo: string; command: string };
+
 export type AppRecord = {
   id: string;
   name: string;
@@ -24,6 +30,12 @@ export type AppRecord = {
   repo_urls?: string[];
   /** strict = restrict (code-only); workspace = host read incl. Simulator */
   grok_sandbox?: GrokSandboxProfile;
+  /** none = agent brings its own; flutter = pinned SDK cloned into the handoff */
+  agent_toolchain?: AgentToolchain;
+  /** Grant the agent Simulator device-tree writes (real installs/screenshots) */
+  allow_simulator_writes?: boolean;
+  /** Commands DD re-runs after a fix job; all must pass before a defect resolves */
+  verify_commands?: VerifyCommand[];
   /** App-level fallback when a repo entry has no source of its own. */
   base_remote?: string;
   /** App-level fallback branch. */
@@ -125,6 +137,28 @@ export type BatchJob = {
     repoUrl?: string;
   }>;
   prs?: BatchJobPr[];
+  verification?: BatchJobVerification;
+};
+
+/** One operator-defined check DD re-ran after the fix session. */
+export type VerifyResult = {
+  repo: string;
+  command: string;
+  cwd: string;
+  exit_code: number | null;
+  signal: string | null;
+  ok: boolean;
+  duration_ms: number;
+  output_tail: string;
+  skipped_reason?: string;
+};
+
+export type BatchJobVerification = {
+  ran: boolean;
+  ok: boolean;
+  results: VerifyResult[];
+  startedAt: string;
+  finishedAt: string;
 };
 
 export async function api<T>(path: string, opts?: RequestInit): Promise<T> {

@@ -26,7 +26,13 @@ import type { GridColDef } from '@mui/x-data-grid';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link as RouterLink, useSearchParams } from 'react-router-dom';
 import { useAppContext } from '../AppContext';
-import { api, type BatchJob, type BatchJobPr, type BatchRecord } from '../api';
+import {
+  api,
+  type BatchJob,
+  type BatchJobPr,
+  type BatchJobVerification,
+  type BatchRecord,
+} from '../api';
 import {
   AdminDataGrid,
   cellTextClamp2,
@@ -100,6 +106,92 @@ function formatMergedAt(iso: string | null | undefined): string {
   if (!iso) return '';
   const d = iso.slice(0, 10);
   return d || iso;
+}
+
+/**
+ * Operator-defined checks DD re-ran after the agent exited. A failing row is
+ * why a defect stayed open, so the failing output must be visible here — not
+ * buried in the log or in verify.json on disk.
+ */
+function VerificationPanel({ v }: { v: BatchJobVerification }) {
+  const passed = v.results.filter((r) => r.ok).length;
+  return (
+    <Stack spacing={0.75}>
+      <Stack direction="row" spacing={1} alignItems="center">
+        <Typography variant="subtitle2">Verification</Typography>
+        <Chip
+          size="small"
+          color={v.ok ? 'success' : 'error'}
+          label={
+            v.ok
+              ? `${passed}/${v.results.length} passed`
+              : `${passed}/${v.results.length} passed — defect kept open`
+          }
+        />
+      </Stack>
+      {v.results.map((r, i) => (
+        <Box
+          key={`${r.repo}-${i}`}
+          sx={{
+            p: 1,
+            borderRadius: 1,
+            border: 1,
+            borderColor: r.ok ? 'divider' : 'error.main',
+            bgcolor: 'background.default',
+          }}
+        >
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+            <Chip
+              size="small"
+              color={r.ok ? 'success' : 'error'}
+              label={
+                r.skipped_reason
+                  ? 'skipped'
+                  : r.ok
+                    ? 'pass'
+                    : `exit ${r.exit_code ?? r.signal ?? 'killed'}`
+              }
+            />
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+              {r.repo}
+            </Typography>
+            <Typography
+              variant="body2"
+              sx={{ fontFamily: 'ui-monospace, Menlo, monospace' }}
+            >
+              {r.command}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              {(r.duration_ms / 1000).toFixed(1)}s
+            </Typography>
+          </Stack>
+          {r.skipped_reason ? (
+            <Typography variant="caption" color="error.main">
+              {r.skipped_reason}
+            </Typography>
+          ) : null}
+          {!r.ok && r.output_tail ? (
+            <Box
+              sx={{
+                mt: 0.75,
+                p: 1,
+                maxHeight: 180,
+                overflow: 'auto',
+                borderRadius: 1,
+                bgcolor: 'action.hover',
+                fontSize: 11,
+                fontFamily: 'ui-monospace, Menlo, monospace',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+              }}
+            >
+              {r.output_tail}
+            </Box>
+          ) : null}
+        </Box>
+      ))}
+    </Stack>
+  );
 }
 
 function PrRow({ p }: { p: BatchJobPr }) {
@@ -1043,6 +1135,9 @@ export function JobsPage() {
                     <PrRow key={`${p.repo}-${p.branch}`} p={p} />
                   ))}
                 </Stack>
+              ) : null}
+              {detailJob.verification?.ran ? (
+                <VerificationPanel v={detailJob.verification} />
               ) : null}
               <Box
                 ref={logBoxRef}
