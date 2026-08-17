@@ -1,7 +1,10 @@
-/** Named git remote configured in App Settings */
+/** Named repo configured in App Settings */
 export type AppRepoEntry = {
   name: string;
+  /** GitHub URL when base_source is origin; absolute checkout path when local. */
   url: string;
+  base_source?: 'origin' | 'local';
+  base_branch?: string;
 };
 
 /** Agent sandbox profile for this app (App Settings). API field: grok_sandbox. */
@@ -21,6 +24,10 @@ export type AppRecord = {
   repo_urls?: string[];
   /** strict = restrict (code-only); workspace = host read incl. Simulator */
   grok_sandbox?: GrokSandboxProfile;
+  /** App-level fallback when a repo entry has no source of its own. */
+  base_remote?: string;
+  /** App-level fallback branch. */
+  base_branch?: string;
   default?: boolean;
 };
 
@@ -33,7 +40,10 @@ export type Defect = {
   summary: string;
   client: string;
   surface: string;
+  /** How it was detected: detector or lens name (`parity-review`, `console`). */
   source?: string;
+  /** Who filed it: operator name or agent tool. Empty on pre-existing records. */
+  reporter?: string;
   /** Related repo names (from Report ticks) */
   repos?: string[];
   /** Report-time screenshots */
@@ -42,7 +52,10 @@ export type Defect = {
   fix_evidence?: string[];
   body: string;
   path: string;
+  /** UTC date-only, e.g. `2026-08-16` — no time. Prefer `created_at` for display. */
   reported?: string;
+  /** Report instant, ISO 8601 UTC. Absent on records written before it was exposed. */
+  created_at?: string;
   resolution?: string;
 };
 
@@ -119,6 +132,24 @@ export async function api<T>(path: string, opts?: RequestInit): Promise<T> {
   const data = (await res.json().catch(() => ({}))) as T & { error?: string };
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
+}
+
+export function listRepoBranches(
+  source: 'origin' | 'local',
+  location: string,
+): Promise<{ branches: string[]; current?: string }> {
+  return api('/api/git/branches', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source, location }),
+  });
+}
+
+export function chooseLocalFolder(): Promise<{
+  path?: string;
+  cancelled?: boolean;
+}> {
+  return api('/api/git/choose-folder', { method: 'POST' });
 }
 
 export function evidenceUrl(rel: string): string | null {

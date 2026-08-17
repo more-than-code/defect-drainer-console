@@ -42,6 +42,7 @@ import {
   cellTextClamp2,
 } from '../components/AdminDataGrid';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { EvidenceGallery } from '../components/EvidenceGallery';
 import { ErrorState } from '../components/ErrorState';
 import { FilterSelect } from '../components/FilterSelect';
 import { ListPage } from '../components/ListPage';
@@ -76,6 +77,39 @@ function shortDefectId(id: string): string {
   const tail = parts[parts.length - 1] || '';
   const date = parts[1] || '';
   return `DEF-${date}…${tail}`;
+}
+
+/**
+ * Report instant in the operator's local timezone.
+ * `created_at` is ISO UTC; `reported` is UTC date-only and used only as a
+ * fallback for records written before `created_at` was exposed.
+ */
+function reportedLocal(defect: {
+  created_at?: string;
+  reported?: string;
+}): { date: string; time: string } | null {
+  const ms = defect.created_at ? Date.parse(defect.created_at) : NaN;
+  if (Number.isFinite(ms)) {
+    const d = new Date(ms);
+    return {
+      date: d.toLocaleDateString(),
+      time: d.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }),
+    };
+  }
+  return defect.reported ? { date: defect.reported, time: '' } : null;
+}
+
+function evidenceItems(rels: string[]): { url: string; alt: string }[] {
+  const items: { url: string; alt: string }[] = [];
+  for (const rel of rels) {
+    const url = evidenceUrl(rel);
+    if (url) items.push({ url, alt: rel });
+  }
+  return items;
 }
 
 function appRepoUrlText(app: AppRecord | undefined): string {
@@ -120,7 +154,7 @@ export function DefectsPage() {
   const [detailError, setDetailError] = useState('');
   const [detailBusy, setDetailBusy] = useState(false);
   const [deleteDefectOpen, setDeleteDefectOpen] = useState(false);
-  const [lightbox, setLightbox] = useState<string | null>(null);
+  const [galleryOpen, setGalleryOpen] = useState(false);
   /** Create defect (former Report page) as list-row creation modal */
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -204,6 +238,7 @@ export function DefectsPage() {
     setDetail(null);
     setDetailError('');
     setDeleteDefectOpen(false);
+    setGalleryOpen(false);
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
@@ -268,7 +303,7 @@ export function DefectsPage() {
     const query = q.trim().toLowerCase();
     if (query) {
       rows = rows.filter((d) => {
-        const hay = [d.id, d.title, d.summary, d.surface, d.source]
+        const hay = [d.id, d.title, d.summary, d.surface, d.source, d.reporter]
           .join(' ')
           .toLowerCase();
         return hay.includes(query);
@@ -391,14 +426,56 @@ export function DefectsPage() {
         field: 'reported',
         headerName: 'Reported',
         flex: 0.5,
-        minWidth: 72,
+        minWidth: 84,
         maxWidth: 110,
-        valueGetter: (_v, row) => row.reported || '',
-        renderCell: ({ value }) => (
-          <Typography variant="caption" sx={cellTextClamp2}>
-            {String(value ?? '')}
-          </Typography>
-        ),
+        // ISO UTC sorts lexicographically in chronological order; the date-only
+        // fallback sorts alongside it correctly.
+        valueGetter: (_v, row) => row.created_at || row.reported || '',
+        renderCell: ({ row }) => {
+          const local = reportedLocal(row);
+          if (!local) return null;
+          return (
+            <Box>
+              <Typography variant="caption" display="block">
+                {local.date}
+              </Typography>
+              {local.time ? (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  display="block"
+                >
+                  {local.time}
+                </Typography>
+              ) : null}
+            </Box>
+          );
+        },
+      },
+      {
+        field: 'reporter',
+        headerName: 'Reporter',
+        flex: 0.55,
+        minWidth: 88,
+        maxWidth: 140,
+        valueGetter: (_v, row) => row.reporter || row.source || '',
+        renderCell: ({ row }) => {
+          const who = (row.reporter || '').trim();
+          // No reporter stored (filed before the field existed): show how it was
+          // detected instead, dimmed to mark it as a fallback rather than an identity.
+          const fallback = (row.source || '').trim();
+          if (!who && !fallback) return null;
+          return (
+            <Typography
+              variant="caption"
+              color={who ? 'text.primary' : 'text.secondary'}
+              fontStyle={who ? undefined : 'italic'}
+              sx={cellTextClamp2}
+            >
+              {who || fallback}
+            </Typography>
+          );
+        },
       },
       {
         field: 'jobs',
@@ -729,6 +806,7 @@ export function DefectsPage() {
         maxWidth="md"
         fullWidth
         scroll="paper"
+        disableEscapeKeyDown={galleryOpen}
       >
         <DialogTitle sx={{ pr: 6 }}>
           {detailLoading
@@ -772,7 +850,11 @@ export function DefectsPage() {
                 sx={{ fontFamily: 'ui-monospace, Menlo, monospace' }}
               >
                 {detail.id}
-                {detail.reported ? ` · reported ${detail.reported}` : ''}
+                {(() => {
+                  const local = reportedLocal(detail);
+                  if (!local) return '';
+                  return ` · reported ${local.date}${local.time ? ` ${local.time}` : ''}`;
+                })()}
                 {detail.source ? ` · ${detail.source}` : ''}
               </Typography>
               <Box>
@@ -926,76 +1008,23 @@ export function DefectsPage() {
                   <MarkdownBody>{detail.resolution}</MarkdownBody>
                 </Box>
               ) : null}
-              <Box>
-                <Typography variant="subtitle2" gutterBottom>
-                  Report evidence
-                </Typography>
-                {(detail.evidence || []).length ? (
-                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                    {detail.evidence.map((rel) => {
-                      const url = evidenceUrl(rel);
-                      if (!url) return null;
-                      return (
-                        <Box
-                          key={rel}
-                          component="img"
-                          src={url}
-                          alt={rel}
-                          onClick={() => setLightbox(url)}
-                          sx={{
-                            width: 96,
-                            height: 96,
-                            objectFit: 'cover',
-                            borderRadius: 1,
-                            border: 1,
-                            borderColor: 'divider',
-                            cursor: 'zoom-in',
-                          }}
-                        />
-                      );
-                    })}
-                  </Stack>
-                ) : (
-                  <Typography variant="caption" color="text.secondary">
-                    None
-                  </Typography>
-                )}
-              </Box>
-              <Box>
-                <Typography variant="subtitle2" gutterBottom>
-                  Fix evidence
-                </Typography>
-                {(detail.fix_evidence || []).length ? (
-                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                    {detail.fix_evidence!.map((rel) => {
-                      const url = evidenceUrl(rel);
-                      if (!url) return null;
-                      return (
-                        <Box
-                          key={rel}
-                          component="img"
-                          src={url}
-                          alt={rel}
-                          onClick={() => setLightbox(url)}
-                          sx={{
-                            width: 96,
-                            height: 96,
-                            objectFit: 'cover',
-                            borderRadius: 1,
-                            border: 1,
-                            borderColor: 'success.main',
-                            cursor: 'zoom-in',
-                          }}
-                        />
-                      );
-                    })}
-                  </Stack>
-                ) : (
-                  <Typography variant="caption" color="text.secondary">
-                    None yet
-                  </Typography>
-                )}
-              </Box>
+              <EvidenceGallery
+                key={detail.id}
+                onViewerChange={setGalleryOpen}
+                groups={[
+                  {
+                    title: 'Report evidence',
+                    emptyLabel: 'None',
+                    items: evidenceItems(detail.evidence || []),
+                  },
+                  {
+                    title: 'Fix evidence',
+                    emptyLabel: 'None yet',
+                    accent: 'success',
+                    items: evidenceItems(detail.fix_evidence || []),
+                  },
+                ]}
+              />
               {detail.body ? (
                 <Box>
                   <Typography variant="subtitle2" gutterBottom>
@@ -1065,26 +1094,6 @@ export function DefectsPage() {
         onCancel={() => setDeleteDefectOpen(false)}
       />
 
-      <Dialog
-        open={!!lightbox}
-        onClose={() => setLightbox(null)}
-        maxWidth="lg"
-        onClick={() => setLightbox(null)}
-      >
-        {lightbox ? (
-          <Box
-            component="img"
-            src={lightbox}
-            alt="Preview"
-            sx={{
-              maxWidth: '90vw',
-              maxHeight: '90vh',
-              display: 'block',
-              cursor: 'zoom-out',
-            }}
-          />
-        ) : null}
-      </Dialog>
     </ListPage>
   );
 }

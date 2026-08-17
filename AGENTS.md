@@ -6,7 +6,7 @@
 - Dev proxy: Vite → `127.0.0.1:8788`
 - Cross-repo plans: `/Users/joe/workspace/defect-drainer/tasks/todo.md`
 - Local tasks: `tasks/todo.md`
-- Run: `pnpm dev` → `127.0.0.1:5173` (backend must be up)
+- Run: `pnpm dev` → `127.0.0.1:5174` (backend must be up)
 
 ## Page composition (mo-webadmin-next)
 
@@ -43,3 +43,11 @@ ListPage
 ### Non-list screens
 
 Settings / onboarding / free-form report UI may use `PageBody` + `PageHeader` without a grid.
+
+### Settings repos
+
+Each repo row is **Name → Base source → Location → Base branch**. Switching to Local checkout clears Location. Branch options come from `POST /api/git/branches`; the folder icon calls `POST /api/git/choose-folder` (macOS Finder). Do not put a free-text placeholder inside the Base branch select (it overlaps the label).
+
+### Defect evidence
+
+Thumbs stay in the defect dialog. Full-size browse is `EvidenceGallery` (modal only).

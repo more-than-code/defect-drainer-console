@@ -12,10 +12,10 @@ Routes:
 | Path | Page |
 |------|------|
 | `/onboarding` | **Choose or create app** (required first; stored in localStorage) |
-| `/` | **Defects** — inventory, report modal, multi-select → batch agent fix |
+| `/` | **Defects** — inventory, report modal, multi-select → batch agent fix. Reported column is local date + 24h time (`created_at`). Reporter column is who filed it (`reporter`, else dimmed `source`). Report/fix evidence are 96×96 thumbs; click opens a gallery modal (←/→, Esc back to the defect). |
 | `/jobs` | **Jobs** — harness runs, logs, Create PR / Refresh PRs |
 | `/analytics` | **Analytics** — Phase A defect/prompt/job SQL charts + FTS find |
-| `/settings` | **Settings** — app repos, workspace root, agent sandbox |
+| `/settings` | **Settings** — per-repo **Base source** (GitHub \| Local checkout) → **Location** (URL or absolute path; Local starts empty, folder button opens Finder) → **Base branch** (read from that repo). Agent sandbox. This-browser operator name (reporter). |
 
 Talks **only** to `defect-drainer-backend` over HTTP.
 
@@ -27,7 +27,7 @@ cd /Users/joe/workspace/defect-drainer/backend && pnpm dev
 
 # Terminal 2
 cd /Users/joe/workspace/defect-drainer/console && pnpm install && pnpm dev
-# → http://127.0.0.1:5173
+# → http://127.0.0.1:5174
 ```
 
 ## Related

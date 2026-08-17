@@ -23,6 +23,7 @@ import Typography from '@mui/material/Typography';
 import { useEffect, useMemo, useState } from 'react';
 import { useAppContext } from '../AppContext';
 import { api, type Job } from '../api';
+import { getOperatorName } from '../operator';
 import {
   getStoredReportRepos,
   setStoredReportRepos,
@@ -174,6 +175,8 @@ export function ReportDefectDialog({
       fd.set('surface', surface.trim());
       fd.set('app_id', appId);
       fd.set('source', 'console');
+      const operator = getOperatorName();
+      if (operator) fd.set('reporter', operator);
       fd.set('mode', useGrokNormalize ? 'grok' : 'local');
       if (selectedRepos.length) {
         fd.set('repos', JSON.stringify(selectedRepos));
