@@ -31,6 +31,7 @@ import {
   type BatchJob,
   type BatchJobPr,
   type BatchJobVerification,
+  type DiffHygieneReport,
   type VerifyResult,
   type BatchRecord,
 } from '../api';
@@ -127,6 +128,47 @@ function verdictOf(
   );
   if (!before || before.skipped_reason) return 'blocked';
   return before.ok ? 'regression' : 'pre-existing';
+}
+
+/**
+ * Advisory: reformatting is messy, not wrong, so it never blocks a resolve —
+ * but a diff that is mostly reflow hides the real change from review.
+ */
+function DiffHygienePanel({ d }: { d: DiffHygieneReport }) {
+  const rows = d.repos.filter((r) => r.changedLines > 0 || r.error);
+  if (!rows.length) return null;
+  return (
+    <Stack spacing={0.5}>
+      <Stack direction="row" spacing={1} alignItems="center">
+        <Typography variant="subtitle2">Diff hygiene</Typography>
+        {d.noisy ? (
+          <Chip size="small" color="warning" label="mostly reformatting" />
+        ) : null}
+      </Stack>
+      {rows.map((r) => (
+        <Typography
+          key={r.repo}
+          variant="body2"
+          color={
+            r.error
+              ? 'text.secondary'
+              : r.formattingOnlyLines
+                ? 'warning.main'
+                : 'text.secondary'
+          }
+        >
+          {r.error
+            ? `${r.repo}: ${r.error}`
+            : `${r.repo}: ${r.changedLines} lines across ${r.filesChanged} file(s)` +
+              (r.formattingOnlyLines
+                ? ` — ${r.formattingOnlyLines} reformatting only (${r.formattingOnlyHunks}/${r.hunks} hunks, ${Math.round(
+                    r.formattingRatio * 100,
+                  )}%)`
+                : ' — no reformatting noise')}
+        </Typography>
+      ))}
+    </Stack>
+  );
 }
 
 function VerificationPanel({
@@ -1193,6 +1235,9 @@ export function JobsPage() {
                   v={detailJob.verification}
                   baseline={detailJob.baseline}
                 />
+              ) : null}
+              {detailJob.diffHygiene ? (
+                <DiffHygienePanel d={detailJob.diffHygiene} />
               ) : null}
               <Box
                 ref={logBoxRef}

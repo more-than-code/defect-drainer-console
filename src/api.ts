@@ -140,6 +140,7 @@ export type BatchJob = {
   verification?: BatchJobVerification;
   /** Same commands run before the agent, so pre-existing red is attributable. */
   baseline?: BatchJobVerification;
+  diffHygiene?: DiffHygieneReport;
 };
 
 /** One operator-defined check DD re-ran after the fix session. */
@@ -154,6 +155,21 @@ export type VerifyResult = {
   output_tail: string;
   skipped_reason?: string;
 };
+
+/** How much of a job's diff was reformatting rather than change. */
+export type RepoDiffHygiene = {
+  repo: string;
+  filesChanged: number;
+  changedLines: number;
+  effectiveLines: number;
+  formattingOnlyLines: number;
+  hunks: number;
+  formattingOnlyHunks: number;
+  formattingRatio: number;
+  error?: string;
+};
+
+export type DiffHygieneReport = { repos: RepoDiffHygiene[]; noisy: boolean };
 
 export type BatchJobVerification = {
   ran: boolean;
