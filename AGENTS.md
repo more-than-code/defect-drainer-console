@@ -2,11 +2,11 @@
 
 **Folder:** `console/` · **Git name:** `defect-drainer-console`
 
-- Operator UI only — all data via backend HTTP (`/api`, `/evidence`, `/health`)
-- Dev proxy: Vite → `127.0.0.1:8788`
+- Operator UI only — all data via harness HTTP (`/api`, `/evidence`, `/health`)
+- Dev proxy: Vite → `127.0.0.1:8788` (`defect-drainer serve` in `../backend-go`)
 - Cross-repo plans: `/Users/joe/workspace/defect-drainer/tasks/todo.md`
 - Local tasks: `tasks/todo.md`
-- Run: `pnpm dev` → `127.0.0.1:5174` (backend must be up)
+- Run: `pnpm dev` → `127.0.0.1:5174` (Go API must be up)
 
 ## Page composition (mo-webadmin-next)
 

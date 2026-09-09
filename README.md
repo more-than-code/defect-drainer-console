@@ -17,13 +17,13 @@ Routes:
 | `/analytics` | **Analytics** — Phase A defect/prompt/job SQL charts + FTS find |
 | `/settings` | **Settings** — per-repo **Base source** (GitHub \| Local checkout) → **Location** (URL or absolute path; Local starts empty, folder button opens Finder) → **Base branch** (read from that repo). Agent sandbox. This-browser operator name (reporter). |
 
-Talks **only** to `defect-drainer-backend` over HTTP.
+Talks **only** to the harness HTTP API (`/api`, `/health`, `/evidence`) — live process is `defect-drainer serve` in `../backend-go`.
 
 ## Run
 
 ```bash
 # Terminal 1
-cd /Users/joe/workspace/defect-drainer/backend && pnpm dev
+cd /Users/joe/workspace/defect-drainer/backend-go && go run ./cmd/defect-drainer serve
 
 # Terminal 2
 cd /Users/joe/workspace/defect-drainer/console && pnpm install && pnpm dev
@@ -33,7 +33,8 @@ cd /Users/joe/workspace/defect-drainer/console && pnpm install && pnpm dev
 ## Related
 
 - Umbrella: `../README.md`, `../apps/registry.json`
-- Backend: `../backend/README.md`
+- Live API: `../backend-go/README.md`
+- Rollback API: `../backend/README.md`
 
 ## License
 
