@@ -34,6 +34,8 @@ export type AppRecord = {
   agent_toolchain?: AgentToolchain;
   /** Grant the agent Simulator device-tree writes (real installs/screenshots) */
   allow_simulator_writes?: boolean;
+  /** Cap on the coding agent's turns for this app. 0 / absent = server default (80). */
+  agent_max_turns?: number;
   /** Commands DD re-runs after a fix job; all must pass before a defect resolves */
   verify_commands?: VerifyCommand[];
   /** App-level fallback when a repo entry has no source of its own. */

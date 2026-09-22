@@ -142,6 +142,8 @@ export function SettingsPage() {
     useState<GrokSandboxProfile>('strict');
   const [agentToolchain, setAgentToolchain] = useState<AgentToolchain>('none');
   const [allowSimulatorWrites, setAllowSimulatorWrites] = useState(false);
+  // Empty string means "unset" — the server falls back to its own default.
+  const [agentMaxTurns, setAgentMaxTurns] = useState('');
   const [verifyCommands, setVerifyCommands] = useState<VerifyCommand[]>([]);
   const [workspaceRoot, setWorkspaceRoot] = useState('');
   const [branchLoads, setBranchLoads] = useState<Record<number, BranchLoad>>(
@@ -162,6 +164,7 @@ export function SettingsPage() {
     );
     setAgentToolchain(app.agent_toolchain === 'flutter' ? 'flutter' : 'none');
     setAllowSimulatorWrites(!!app.allow_simulator_writes);
+    setAgentMaxTurns(app.agent_max_turns ? String(app.agent_max_turns) : '');
     setVerifyCommands(app.verify_commands ?? []);
     setWorkspaceRoot(app.workspace_root || '');
     setIsDefault(!!app.default);
@@ -359,6 +362,7 @@ export function SettingsPage() {
           grok_sandbox: grokSandbox,
           agent_toolchain: agentToolchain,
           allow_simulator_writes: allowSimulatorWrites,
+          agent_max_turns: Number(agentMaxTurns) > 0 ? Number(agentMaxTurns) : 0,
           verify_commands: verifyCommands.filter(
             (v) => v.repo.trim() && v.command.trim(),
           ),
@@ -647,6 +651,23 @@ export function SettingsPage() {
               {agentToolchain === 'flutter'
                 ? "Reads the .fvmrc pin and clones that SDK into the job handoff, where the sandbox can write. Lets the agent run the project's real tests instead of improvising an SDK. Needs the pinned version installed on the host (fvm install); skipped with a warning if it is missing."
                 : 'Agent must locate a toolchain itself. Under a write-confined sandbox it usually cannot run the project test suite, so fix evidence tends to be weaker.'}
+            </FormHelperText>
+          </FormControl>
+
+          <FormControl size="small" fullWidth>
+            <TextField
+              size="small"
+              label="Agent turn cap"
+              type="number"
+              value={agentMaxTurns}
+              placeholder="80"
+              onChange={(e) => setAgentMaxTurns(e.target.value)}
+              inputProps={{ min: 1, max: 1000 }}
+            />
+            <FormHelperText>
+              {agentMaxTurns
+                ? `The coding agent stops after ${agentMaxTurns} turns per attempt. Every file read, edit and command is one turn, so a Flutter repo — where each pub get, analyze and test is its own turn — burns them far faster than a Node one. Hitting the cap ends that attempt, not the job: Defect Drainer resumes the agent where it left off until the required fix evidence exists, or until the job's own limits stop it.`
+                : 'Blank uses the server default (80). Raise it for repos where a single attempt does a lot of slow tool work, so the agent gets further each time before Defect Drainer has to resume it.'}
             </FormHelperText>
           </FormControl>
 
