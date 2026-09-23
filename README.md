@@ -5,7 +5,7 @@
 
 Operator UI for the **agent harness defect-fixing workflow** (React 19 + MUI). Primitives adapted from `mo-webadmin-next` (copy-only; extract shared package later).
 
-Workflow framing: [`../docs/workflow.md`](../docs/workflow.md) — **coding agent**, not a single vendor product name.
+Workflow framing: [`../backend-go/docs/workflow.md`](../backend-go/docs/workflow.md) — **coding agent**, not a single vendor product name. What each button does and when to use it: [`../backend-go/docs/operating.md`](../backend-go/docs/operating.md).
 
 Routes:
 
@@ -13,7 +13,7 @@ Routes:
 |------|------|
 | `/onboarding` | **Choose or create app** (required first; stored in localStorage) |
 | `/` | **Defects** — inventory, report modal. One checked defect is **Start fix**; more than one is **Start batch fix**. A resolved defect cannot start a fix until it is reopened. The defect dialog can **Start fix** for an open defect, or add it to the selection. Reported column is local date + 24h time (`created_at`). Reporter column is who filed it (`reporter`, else dimmed `source`). Report/fix evidence are 96×96 thumbs; click opens a gallery modal (←/→, Esc back to the defect). |
-| `/jobs` | **Jobs** — harness runs, logs. The job detail opens in a side drawer and lists each worktree's base branch, job branch, and path. GitHub bases show Create PR and Refresh PRs. A local checkout shows Merge, and that button is disabled once the merge has landed. Refresh PRs is not shown for a local merge. If the worktree has uncommitted files, the confirm dialog lists them and a message, and **Commit and merge** commits those files before merging. Cancel leaves the worktree unchanged |
+| `/jobs` | **Jobs** — harness runs, logs. **Stop**, **Resume** (continue the agent's last session) and **Re-run** (new session, same worktrees) are enabled by the server's `resumable` / `rerunnable` checks; a disabled button's tooltip gives the reason. The job detail opens in a side drawer and lists each worktree's base branch, job branch, and path. GitHub bases show Create PR and Refresh PRs. A local checkout shows Merge, and that button is disabled once the merge has landed. Refresh PRs is not shown for a local merge. If the worktree has uncommitted files, the confirm dialog lists them and a message, and **Commit and merge** commits those files before merging. Cancel leaves the worktree unchanged |
 | `/analytics` | **Analytics** — Phase A defect/prompt/job SQL charts + FTS find |
 | `/settings` | **Settings** — per-repo **Base source** (GitHub \| Local checkout) → **Location** (URL or absolute path; Local starts empty, folder button opens Finder) → **Base branch** (read from that repo). Agent sandbox. This-browser operator name (reporter). |
 
@@ -34,7 +34,7 @@ cd /Users/joe/workspace/defect-drainer/console && pnpm install && pnpm dev
 
 - Umbrella: `../README.md`, `../apps/registry.json`
 - Live API: `../backend-go/README.md`
-- Rollback API: `../backend/README.md`
+- Operator runbook: `../backend-go/docs/operating.md`
 
 ## License
 
