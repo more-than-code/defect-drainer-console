@@ -143,6 +143,27 @@ export type BatchJob = {
   /** Same commands run before the agent, so pre-existing red is attributable. */
   baseline?: BatchJobVerification;
   diffHygiene?: DiffHygieneReport;
+  /** Driver-loop record, cumulative across Re-run and Resume. */
+  agentRun?: AgentRun;
+  /** Server-computed: may this job continue its last agent session? */
+  resumable?: RestartCheck;
+  /** Server-computed: may this job start a new agent session? */
+  rerunnable?: RestartCheck;
+};
+
+/** Whether a restart is allowed; `reason` says why not, for the operator. */
+export type RestartCheck = { ok: boolean; reason?: string };
+
+export type AgentRun = {
+  iterations: number;
+  completedByArtifacts: boolean;
+  stoppedBy?: string;
+  stopReasons?: string[];
+  turns?: number;
+  totalCostUsd?: number;
+  sessionId?: string;
+  missing?: string[];
+  resumes?: number;
 };
 
 /** One operator-defined check DD re-ran after the fix session. */

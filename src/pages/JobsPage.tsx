@@ -5,6 +5,7 @@
 import CallMergeIcon from '@mui/icons-material/CallMerge';
 import CloseIcon from '@mui/icons-material/Close';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import ReplayIcon from '@mui/icons-material/Replay';
 import StopIcon from '@mui/icons-material/Stop';
@@ -54,7 +55,7 @@ import {
   summarizePrs,
 } from '../prStatus';
 
-type JobAction = 'stop' | 'rerun' | 'create-pr' | 'delete';
+type JobAction = 'stop' | 'resume' | 'rerun' | 'create-pr' | 'delete';
 
 function shortBatchId(id: string): string {
   const i = id.lastIndexOf('-');
@@ -86,13 +87,18 @@ function manifestStatusColor(
 function canStop(j: BatchJob) {
   return j.status === 'running' || j.status === 'queued';
 }
+// Restart rules live on the server (resumable / rerunnable); a job object
+// without them — e.g. an action response — offers neither until reloaded.
+function canResume(j: BatchJob) {
+  return j.resumable?.ok === true;
+}
 function canRerun(j: BatchJob) {
-  return (
-    j.mode === 'grok' &&
-    (j.worktrees?.length ?? 0) > 0 &&
-    j.status !== 'running' &&
-    j.status !== 'queued'
-  );
+  return j.rerunnable?.ok === true;
+}
+function restartTooltip(label: string, check?: BatchJob['resumable']) {
+  return check && !check.ok && check.reason
+    ? `${label} — ${check.reason}`
+    : label;
 }
 function canCreatePr(j: BatchJob) {
   return (
@@ -475,10 +481,16 @@ const ACTION_COPY: Record<
       `Stop the coding agent for ${id}? The process will be terminated (SIGTERM → SIGKILL).`,
     confirm: 'Stop',
   },
+  resume: {
+    title: 'Resume agent?',
+    message: (id) =>
+      `Continue the last coding-agent session for ${id}? The agent keeps its context and worktree edits, with a fresh iteration and time budget. Turns and cost add to the job's totals.`,
+    confirm: 'Resume',
+  },
   rerun: {
     title: 'Re-run agent?',
     message: (id) =>
-      `Re-run the coding agent on existing worktrees for ${id}? A new agent session starts; prior log lines are kept.`,
+      `Start a new coding-agent session for ${id}? Worktree edits, notes and the original baseline are kept, but the agent starts without its previous context.`,
     confirm: 'Re-run',
   },
   'create-pr': {
@@ -737,6 +749,14 @@ export function JobsPage() {
         );
         setDetailJob(job);
         setJobActionMsg(`Stopped ${job.jobId}`);
+      } else if (action === 'resume') {
+        const { job } = await api<{ job: BatchJob }>(
+          `/api/batch-jobs/${encodeURIComponent(id)}/resume`,
+          { method: 'POST' },
+        );
+        setDetailJob(job);
+        openDetail(id);
+        setJobActionMsg(`Resuming ${job.jobId}`);
       } else if (action === 'rerun') {
         const { job } = await api<{ job: BatchJob }>(
           `/api/batch-jobs/${encodeURIComponent(id)}/rerun`,
@@ -999,9 +1019,9 @@ export function JobsPage() {
       {
         field: 'actions',
         headerName: '',
-        width: 168,
-        minWidth: 168,
-        maxWidth: 168,
+        width: 200,
+        minWidth: 200,
+        maxWidth: 200,
         sortable: false,
         filterable: false,
         resizable: false,
@@ -1038,7 +1058,20 @@ export function JobsPage() {
                 </IconButton>
               </span>
             </Tooltip>
-            <Tooltip title="Re-run">
+            <Tooltip title={restartTooltip('Resume', row.resumable)}>
+              <span>
+                <IconButton
+                  size="small"
+                  color="primary"
+                  aria-label={`Resume ${row.jobId}`}
+                  disabled={!canResume(row) || jobActionBusy}
+                  onClick={() => requestAction('resume', row.jobId)}
+                >
+                  <PlayArrowIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title={restartTooltip('Re-run', row.rerunnable)}>
               <span>
                 <IconButton
                   size="small"
@@ -1450,17 +1483,36 @@ export function JobsPage() {
           >
             Stop
           </Button>
-          <Button
-            size="small"
-            variant="contained"
-            startIcon={<ReplayIcon />}
-            disabled={!detailJob || !canRerun(detailJob) || jobActionBusy}
-            onClick={() =>
-              detailJobId && requestAction('rerun', detailJobId)
-            }
-          >
-            Re-run
-          </Button>
+          <Tooltip title={restartTooltip('Resume', detailJob?.resumable)}>
+            <span>
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<PlayArrowIcon />}
+                disabled={!detailJob || !canResume(detailJob) || jobActionBusy}
+                onClick={() =>
+                  detailJobId && requestAction('resume', detailJobId)
+                }
+              >
+                Resume
+              </Button>
+            </span>
+          </Tooltip>
+          <Tooltip title={restartTooltip('Re-run', detailJob?.rerunnable)}>
+            <span>
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<ReplayIcon />}
+                disabled={!detailJob || !canRerun(detailJob) || jobActionBusy}
+                onClick={() =>
+                  detailJobId && requestAction('rerun', detailJobId)
+                }
+              >
+                Re-run
+              </Button>
+            </span>
+          </Tooltip>
           <Button
             size="small"
             variant="contained"
@@ -1490,7 +1542,7 @@ export function JobsPage() {
         </DialogActions>
       </Dialog>
 
-      {/* Confirm modal for Stop / Re-run / Create PR / Delete */}
+      {/* Confirm modal for Stop / Resume / Re-run / Create PR / Delete */}
       <ConfirmDialog
         open={!!pendingAction && !!actionTargetId}
         title={pendingCopy?.title ?? 'Confirm'}
