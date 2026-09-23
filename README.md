@@ -12,7 +12,7 @@ Routes:
 | Path | Page |
 |------|------|
 | `/onboarding` | **Choose or create app** (required first; stored in localStorage) |
-| `/` | **Defects** — inventory, report modal, multi-select → batch agent fix. Reported column is local date + 24h time (`created_at`). Reporter column is who filed it (`reporter`, else dimmed `source`). Report/fix evidence are 96×96 thumbs; click opens a gallery modal (←/→, Esc back to the defect). |
+| `/` | **Defects** — inventory, report modal. One checked defect is **Start fix**; more than one is **Start batch fix**. A resolved defect cannot start a fix until it is reopened. The defect dialog can **Start fix** for an open defect, or add it to the selection. Reported column is local date + 24h time (`created_at`). Reporter column is who filed it (`reporter`, else dimmed `source`). Report/fix evidence are 96×96 thumbs; click opens a gallery modal (←/→, Esc back to the defect). |
 | `/jobs` | **Jobs** — harness runs, logs, Create PR / Refresh PRs |
 | `/analytics` | **Analytics** — Phase A defect/prompt/job SQL charts + FTS find |
 | `/settings` | **Settings** — per-repo **Base source** (GitHub \| Local checkout) → **Location** (URL or absolute path; Local starts empty, folder button opens Finder) → **Base branch** (read from that repo). Agent sandbox. This-browser operator name (reporter). |

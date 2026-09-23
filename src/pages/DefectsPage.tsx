@@ -592,10 +592,19 @@ export function DefectsPage() {
     [openDetail, jobsByDefect, navigate],
   );
 
-  async function startBatchFix() {
-    const defect_ids = [...selected];
+  function resolvedAmong(ids: string[]) {
+    const statusById = new Map(defects.map((d) => [d.id, d.status]));
+    return ids.filter((id) => statusById.get(id) === 'resolved');
+  }
+
+  async function startFix(ids: string[]) {
+    const defect_ids = ids.filter(Boolean);
     if (!defect_ids.length) {
       setBatchMsg('Select at least one defect');
+      return;
+    }
+    if (resolvedAmong(defect_ids).length) {
+      setBatchMsg('Reopen a resolved defect before starting a fix');
       return;
     }
     // Repo URLs come from App Settings only (not shown on Defects)
@@ -639,7 +648,11 @@ export function DefectsPage() {
       setBatchMsg(
         `Batch ${res.batch.id} · job ${res.job.jobId} (${res.job.status})${wtHint} — opening Jobs…`,
       );
-      setSelected(new Set());
+      setSelected((prev) => {
+        const next = new Set(prev);
+        for (const id of defect_ids) next.delete(id);
+        return next;
+      });
       await refresh();
       navigate(`/jobs?job=${encodeURIComponent(res.job.jobId)}`);
     } catch (e) {
@@ -663,11 +676,12 @@ export function DefectsPage() {
           Defects for <strong>{app?.name ?? 'app'}</strong>
           {app?.repos?.length ? ` · ${app.repos.join(', ')}` : ''}.{' '}
           <strong>New defect</strong> reports an issue; <strong>View</strong> for
-          details; checkbox selects for batch agent fix (
+          details; checkbox selects defects — <strong>Start fix</strong> for
+          one, <strong>Start batch fix</strong> for several. Runs open on{' '}
           <Typography component={RouterLink} to="/jobs" variant="body2">
             Jobs
           </Typography>
-          ).
+          .
         </>
       }
       filters={
@@ -719,7 +733,7 @@ export function DefectsPage() {
       >
         <Stack spacing={1.5}>
           <Typography variant="subtitle1" fontWeight={700}>
-            Batch agent fix
+            {selected.size > 1 ? 'Batch agent fix' : 'Agent fix'}
           </Typography>
           <Typography variant="body2" color="text.secondary">
             Selected rows → worktrees + coding agent. Repo URLs from{' '}
@@ -737,14 +751,30 @@ export function DefectsPage() {
             placeholder="e.g. Fix chat canvas P1/P2 layout bugs"
           />
           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-            <Button
-              variant="contained"
-              startIcon={<BuildIcon />}
-              disabled={batchBusy || selected.size === 0}
-              onClick={() => void startBatchFix()}
+            <Tooltip
+              title={
+                resolvedAmong([...selected]).length
+                  ? 'Reopen a resolved defect before starting a fix'
+                  : ''
+              }
             >
-              Start batch fix ({selected.size})
-            </Button>
+              <span>
+                <Button
+                  variant="contained"
+                  startIcon={<BuildIcon />}
+                  disabled={
+                    batchBusy ||
+                    selected.size === 0 ||
+                    resolvedAmong([...selected]).length > 0
+                  }
+                  onClick={() => void startFix([...selected])}
+                >
+                  {selected.size > 1
+                    ? `Start batch fix (${selected.size})`
+                    : 'Start fix'}
+                </Button>
+              </span>
+            </Tooltip>
             <FormControlLabel
               control={
                 <Checkbox
@@ -880,7 +910,9 @@ export function DefectsPage() {
                   </Stack>
                 ) : (
                   <Typography variant="caption" color="text.secondary">
-                    No batch jobs yet — select this defect and start a batch fix
+                    {detail.status === 'resolved'
+                      ? 'Reopen this defect before starting a fix'
+                      : 'No jobs yet — Start fix runs this defect, or add it to a selection'}
                   </Typography>
                 )}
               </Box>
@@ -1049,8 +1081,32 @@ export function DefectsPage() {
           ) : null}
         </DialogContent>
         <DialogActions sx={{ px: 3, py: 1.5, flexWrap: 'wrap', gap: 1 }}>
+          <Tooltip
+            title={
+              detail?.status === 'resolved'
+                ? 'Reopen this defect before starting a fix'
+                : ''
+            }
+          >
+            <span>
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<BuildIcon />}
+                disabled={
+                  batchBusy || !detailId || detail?.status === 'resolved'
+                }
+                onClick={() => {
+                  if (detailId) void startFix([detailId]);
+                }}
+              >
+                Start fix
+              </Button>
+            </span>
+          </Tooltip>
           <Button
             size="small"
+            disabled={!detailId}
             onClick={() => {
               if (detailId) toggleOne(detailId);
             }}
