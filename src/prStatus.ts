@@ -2,7 +2,11 @@ import type { BatchJobPr, GhPrState } from './api';
 
 export function isTrackablePr(p: BatchJobPr): boolean {
   return (
-    Boolean(p.url) || p.status === 'created' || p.status === 'existing'
+    Boolean(p.url) ||
+    p.status === 'created' ||
+    p.status === 'existing' ||
+    p.status === 'merged' ||
+    p.kind === 'merge'
   );
 }
 
@@ -33,7 +37,7 @@ export function ghStateColor(
 export function createStatusColor(
   status: string,
 ): 'default' | 'success' | 'warning' | 'error' | 'info' {
-  if (status === 'created' || status === 'existing') return 'info';
+  if (status === 'created' || status === 'existing' || status === 'merged') return 'info';
   if (status === 'failed') return 'error';
   if (status === 'skipped') return 'warning';
   return 'default';

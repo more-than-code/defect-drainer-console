@@ -15,12 +15,14 @@ import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
 import Dialog from '@mui/material/Dialog';
+import Drawer from '@mui/material/Drawer';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import IconButton from '@mui/material/IconButton';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
+import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import type { GridColDef } from '@mui/x-data-grid';
@@ -107,6 +109,93 @@ function canCreatePr(j: BatchJob) {
     j.status !== 'queued'
   );
 }
+
+function repoMerged(j: BatchJob, repo: string): boolean {
+  return (j.prs || []).some(
+    (p) => p.repo === repo && (p.status === 'merged' || p.ghState === 'merged'),
+  );
+}
+
+/** A local merge that already landed should not be offered again. */
+function shipAlreadyDone(j: BatchJob): boolean {
+  const mode = integrateMode(j);
+  if (mode === 'pr') return false;
+  const trees = j.worktrees || [];
+  if (!trees.length) return false;
+  return trees.every((w) => {
+    if ((w.baseSource || 'origin') === 'local') return repoMerged(j, w.repo);
+    const row = (j.prs || []).find((p) => p.repo === w.repo);
+    return (
+      row?.status === 'created' ||
+      row?.status === 'existing' ||
+      row?.ghState === 'merged'
+    );
+  });
+}
+
+/** How this job ships: local bases merge, GitHub bases open a pull request. */
+function integrateMode(job: BatchJob | null | undefined): 'merge' | 'pr' | 'mixed' {
+  const sources = (job?.worktrees || []).map((w) => w.baseSource || 'origin');
+  if (!sources.length || sources.every((s) => s !== 'local')) return 'pr';
+  if (sources.every((s) => s === 'local')) return 'merge';
+  return 'mixed';
+}
+
+function integrateLabel(job: BatchJob | null | undefined): string {
+  const mode = integrateMode(job);
+  if (mode === 'merge') return 'Merge';
+  if (mode === 'mixed') return 'PR / Merge';
+  return 'Create PR';
+}
+
+function integrateDialog(job: BatchJob | null | undefined): {
+  title: string;
+  message: (id: string) => string;
+  confirm: string;
+} {
+  const mode = integrateMode(job);
+  const bases = [
+    ...new Set(
+      (job?.worktrees || [])
+        .map((w) => w.baseBranch)
+        .filter((b): b is string => Boolean(b)),
+    ),
+  ];
+  const into = bases.length ? ` (${bases.join(', ')})` : '';
+  if (mode === 'merge') {
+    return {
+      title: 'Merge into the base branch?',
+      message: (id) =>
+        `Merge committed work on ${id} into the local base branch${into}? The primary checkout is updated only when it is already on that branch and has no uncommitted changes. A dirty checkout is left as it is.`,
+      confirm: 'Merge',
+    };
+  }
+  if (mode === 'mixed') {
+    return {
+      title: 'Open pull requests and merge local repos?',
+      message: (id) =>
+        `For ${id}, GitHub repos get a pull request and local checkouts are merged into their base branch${into}. A local merge updates the primary checkout only when it is already on that branch and clean.`,
+      confirm: 'Continue',
+    };
+  }
+  return {
+    title: 'Create pull requests?',
+    message: (id) =>
+      `Push worktree branches and open GitHub pull requests for ${id} against the saved base branch${into}? Requires gh auth and network on the host.`,
+    confirm: 'Create PR',
+  };
+}
+
+type ShipPreview = {
+  message: string;
+  repos: {
+    repo: string;
+    branch: string;
+    baseBranch?: string;
+    files: string[];
+    commitsAhead: number;
+  }[];
+};
 
 function canRefreshPrs(j: BatchJob) {
   return (j.prs || []).some(isTrackablePr);
@@ -434,6 +523,11 @@ function PrRow({ p }: { p: BatchJobPr }) {
           sx={{ height: 22 }}
         />
       ) : null}
+      {p.base ? (
+        <Typography variant="caption" color="text.secondary">
+          {p.kind === 'merge' ? 'into' : 'base'} {p.base}
+        </Typography>
+      ) : null}
       {p.commits != null && p.status !== 'skipped' ? (
         <Typography variant="caption" color="text.secondary">
           {p.commits} commit(s)
@@ -496,7 +590,7 @@ const ACTION_COPY: Record<
   'create-pr': {
     title: 'Create pull requests?',
     message: (id) =>
-      `Push worktree branches and open GitHub PRs for ${id}? Requires gh auth and network on the host.`,
+      `Push worktree branches and open GitHub pull requests for ${id} against the saved base branch? Requires gh auth and network on the host.`,
     confirm: 'Create PR',
   },
   delete: {
@@ -525,6 +619,10 @@ export function JobsPage() {
 
   const [actionTargetId, setActionTargetId] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<JobAction | null>(null);
+  const [shipPreview, setShipPreview] = useState<ShipPreview | null>(null);
+  const [shipMessage, setShipMessage] = useState('');
+  const [shipLoading, setShipLoading] = useState(false);
+  const [shipError, setShipError] = useState('');
   const [jobActionBusy, setJobActionBusy] = useState(false);
   const [jobActionMsg, setJobActionMsg] = useState('');
   const [loading, setLoading] = useState(true);
@@ -655,10 +753,38 @@ export function JobsPage() {
     );
   }, [setSearchParams]);
 
-  const requestAction = useCallback((action: JobAction, jobId: string) => {
-    setActionTargetId(jobId);
-    setPendingAction(action);
+  const clearShip = useCallback(() => {
+    setShipPreview(null);
+    setShipMessage('');
+    setShipLoading(false);
+    setShipError('');
   }, []);
+
+  const requestAction = useCallback(
+    (action: JobAction, jobId: string) => {
+      setActionTargetId(jobId);
+      setPendingAction(action);
+      clearShip();
+      if (action !== 'create-pr') return;
+      const job =
+        batchJobs.find((j) => j.jobId === jobId) ||
+        (detailJob?.jobId === jobId ? detailJob : null);
+      if (integrateMode(job) === 'pr') return;
+      setShipLoading(true);
+      void api<ShipPreview>(
+        `/api/batch-jobs/${encodeURIComponent(jobId)}/ship-preview`,
+      )
+        .then((preview) => {
+          setShipPreview(preview);
+          setShipMessage(preview.message);
+        })
+        .catch((e) => {
+          setShipError(e instanceof Error ? e.message : String(e));
+        })
+        .finally(() => setShipLoading(false));
+    },
+    [batchJobs, clearShip, detailJob],
+  );
 
   useEffect(() => {
     void refresh();
@@ -724,6 +850,15 @@ export function JobsPage() {
     return rows;
   }, [batchJobs, statusFilter, q]);
 
+  const shipFiles = (shipPreview?.repos || []).flatMap((r) =>
+    (r.files || []).map((path) => ({
+      repo: r.repo,
+      branch: r.branch,
+      base: r.baseBranch,
+      path,
+    })),
+  );
+
   async function executePendingAction() {
     const id = actionTargetId;
     const action = pendingAction;
@@ -771,6 +906,12 @@ export function JobsPage() {
           prs: NonNullable<BatchJob['prs']>;
         }>(`/api/batch-jobs/${encodeURIComponent(id)}/create-prs`, {
           method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            shipFiles.length
+              ? { commit: true, message: shipMessage }
+              : {},
+          ),
         });
         setDetailJob(job);
         openDetail(id);
@@ -778,23 +919,32 @@ export function JobsPage() {
           .filter((p) => p.url)
           .map((p) => `${p.repo}: ${p.url}`)
           .join(' · ');
+        const merged = (prs || [])
+          .filter((p) => p.kind === 'merge' && p.status === 'merged')
+          .map((p) => `${p.repo} into ${p.base}`)
+          .join(' · ');
         const failed = (prs || []).filter((p) => p.status === 'failed').length;
+        const failBit = failed ? ` (${failed} failed — see log)` : '';
         setJobActionMsg(
           urls
-            ? `PRs: ${urls}${failed ? ` (${failed} failed — see log)` : ''}`
-            : failed
-              ? `Create PR finished with ${failed} failure(s) — see log`
-              : 'Create PR: no PRs (no commits or skipped)',
+            ? `PRs: ${urls}${merged ? ` · merged ${merged}` : ''}${failBit}`
+            : merged
+              ? `Merged ${merged}${failBit}`
+              : failed
+                ? `Create PR / merge finished with ${failed} failure(s) — see log`
+                : 'Create PR / merge: no commits or skipped',
         );
       }
       setPendingAction(null);
       setActionTargetId(null);
+      clearShip();
       await refresh();
       if (detailOpen && detailJobId === id) void loadDetail(id);
     } catch (e) {
       setJobActionMsg(e instanceof Error ? e.message : String(e));
       setPendingAction(null);
       setActionTargetId(null);
+      clearShip();
     } finally {
       setJobActionBusy(false);
     }
@@ -1083,13 +1233,19 @@ export function JobsPage() {
                 </IconButton>
               </span>
             </Tooltip>
-            <Tooltip title="Create PR">
+            <Tooltip
+              title={
+                shipAlreadyDone(row) ? 'Already merged' : integrateLabel(row)
+              }
+            >
               <span>
                 <IconButton
                   size="small"
                   color="secondary"
-                  aria-label={`Create PR ${row.jobId}`}
-                  disabled={!canCreatePr(row) || jobActionBusy}
+                  aria-label={`${integrateLabel(row)} ${row.jobId}`}
+                  disabled={
+                    !canCreatePr(row) || shipAlreadyDone(row) || jobActionBusy
+                  }
                   onClick={() => requestAction('create-pr', row.jobId)}
                 >
                   <CallMergeIcon fontSize="small" />
@@ -1114,7 +1270,17 @@ export function JobsPage() {
     [jobActionBusy, openDetail, requestAction],
   );
 
-  const pendingCopy = pendingAction ? ACTION_COPY[pendingAction] : null;
+  const actionJob =
+    (actionTargetId &&
+      (batchJobs.find((j) => j.jobId === actionTargetId) ||
+        (detailJob?.jobId === actionTargetId ? detailJob : null))) ||
+    null;
+  const pendingCopy =
+    pendingAction === 'create-pr'
+      ? integrateDialog(actionJob)
+      : pendingAction
+        ? ACTION_COPY[pendingAction]
+        : null;
 
   return (
     <ListPage
@@ -1200,27 +1366,42 @@ export function JobsPage() {
         </Paper>
       ) : null}
 
-      {/* Job detail modal — View */}
-      <Dialog
+      {/* Job detail drawer — View */}
+      <Drawer
+        anchor="right"
         open={detailOpen}
         onClose={closeDetail}
-        maxWidth="md"
-        fullWidth
-        scroll="paper"
+        slotProps={{
+          paper: {
+            sx: {
+              width: 'min(560px, 100%)',
+              display: 'flex',
+              flexDirection: 'column',
+            },
+          },
+        }}
       >
-        <DialogTitle sx={{ pr: 6 }}>
-          {detailLoading && !detailJob
-            ? 'Loading…'
-            : detailJob?.batchId || detailJobId || 'Job'}
-          <IconButton
-            aria-label="Close"
-            onClick={closeDetail}
-            sx={{ position: 'absolute', right: 8, top: 8 }}
-          >
+        <Box
+          sx={{
+            px: 2,
+            py: 1.5,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            borderBottom: 1,
+            borderColor: 'divider',
+          }}
+        >
+          <Typography variant="h6" noWrap sx={{ flex: 1, minWidth: 0 }}>
+            {detailLoading && !detailJob
+              ? 'Loading…'
+              : detailJob?.batchId || detailJobId || 'Job'}
+          </Typography>
+          <IconButton aria-label="Close" onClick={closeDetail}>
             <CloseIcon />
           </IconButton>
-        </DialogTitle>
-        <DialogContent dividers>
+        </Box>
+        <Box sx={{ flex: 1, overflow: 'auto', px: 2, py: 2 }}>
           {detailLoading && !detailJob ? (
             <LoadingState />
           ) : detailJob ? (
@@ -1300,10 +1481,38 @@ export function JobsPage() {
                 </Box>
               ) : null}
               {(detailJob.worktrees || []).length ? (
-                <Typography variant="caption" color="text.secondary">
-                  worktrees:{' '}
-                  {(detailJob.worktrees || []).map((w) => w.repo).join(', ')}
-                </Typography>
+                <Box>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Worktrees
+                  </Typography>
+                  <Stack spacing={1}>
+                    {(detailJob.worktrees || []).map((w) => (
+                      <Box key={`${w.repo}-${w.branch}`}>
+                        <Typography variant="body2">{w.repo}</Typography>
+                        {(
+                          [
+                            ['Base branch', w.baseBranch || 'not recorded'],
+                            ['Job branch', w.branch],
+                            ['Worktree', w.worktreeAbs],
+                          ] as const
+                        ).map(([label, value]) => (
+                          <Typography
+                            key={label}
+                            variant="caption"
+                            component="div"
+                            color="text.secondary"
+                            sx={{
+                              fontFamily: 'ui-monospace, Menlo, monospace',
+                              wordBreak: 'break-all',
+                            }}
+                          >
+                            {label}: {value}
+                          </Typography>
+                        ))}
+                      </Box>
+                    ))}
+                  </Stack>
+                </Box>
               ) : null}
               {(detailJob.prs || []).length ? (
                 <Stack spacing={0.5}>
@@ -1314,7 +1523,13 @@ export function JobsPage() {
                     flexWrap="wrap"
                     useFlexGap
                   >
-                    <Typography variant="subtitle2">Pull requests</Typography>
+                    <Typography variant="subtitle2">
+                      {integrateMode(detailJob) === 'merge'
+                        ? 'Merges'
+                        : integrateMode(detailJob) === 'mixed'
+                          ? 'Pull requests and merges'
+                          : 'Pull requests'}
+                    </Typography>
                     {summarizePrs(detailJob.prs) ? (
                       <Chip
                         size="small"
@@ -1330,18 +1545,18 @@ export function JobsPage() {
                         }
                       />
                     ) : null}
-                    <Button
-                      size="small"
-                      startIcon={<RefreshIcon />}
-                      disabled={
-                        !canRefreshPrs(detailJob) || jobActionBusy
-                      }
-                      onClick={() =>
-                        detailJobId && void refreshPrs(detailJobId)
-                      }
-                    >
-                      Refresh PRs
-                    </Button>
+                    {integrateMode(detailJob) !== 'merge' ? (
+                      <Button
+                        size="small"
+                        startIcon={<RefreshIcon />}
+                        disabled={!canRefreshPrs(detailJob) || jobActionBusy}
+                        onClick={() =>
+                          detailJobId && void refreshPrs(detailJobId)
+                        }
+                      >
+                        Refresh PRs
+                      </Button>
+                    ) : null}
                   </Stack>
                   {(detailJob.prs || []).map((p) => (
                     <PrRow key={`${p.repo}-${p.branch}`} p={p} />
@@ -1450,8 +1665,19 @@ export function JobsPage() {
           ) : (
             <Typography color="text.secondary">Job not found.</Typography>
           )}
-        </DialogContent>
-        <DialogActions sx={{ px: 3, py: 1.5, flexWrap: 'wrap', gap: 1 }}>
+        </Box>
+        <Box
+          sx={{
+            px: 2,
+            py: 1.5,
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 1,
+            alignItems: 'center',
+            borderTop: 1,
+            borderColor: 'divider',
+          }}
+        >
           <Button
             size="small"
             startIcon={<RefreshIcon />}
@@ -1460,16 +1686,16 @@ export function JobsPage() {
           >
             Refresh log
           </Button>
-          <Button
-            size="small"
-            startIcon={<RefreshIcon />}
-            disabled={
-              !detailJob || !canRefreshPrs(detailJob) || jobActionBusy
-            }
-            onClick={() => detailJobId && void refreshPrs(detailJobId)}
-          >
-            Refresh PRs
-          </Button>
+          {detailJob && integrateMode(detailJob) !== 'merge' ? (
+            <Button
+              size="small"
+              startIcon={<RefreshIcon />}
+              disabled={!canRefreshPrs(detailJob) || jobActionBusy}
+              onClick={() => detailJobId && void refreshPrs(detailJobId)}
+            >
+              Refresh PRs
+            </Button>
+          ) : null}
           <Box sx={{ flex: 1 }} />
           <Button
             size="small"
@@ -1513,18 +1739,33 @@ export function JobsPage() {
               </Button>
             </span>
           </Tooltip>
-          <Button
-            size="small"
-            variant="contained"
-            color="secondary"
-            startIcon={<CallMergeIcon />}
-            disabled={!detailJob || !canCreatePr(detailJob) || jobActionBusy}
-            onClick={() =>
-              detailJobId && requestAction('create-pr', detailJobId)
+          <Tooltip
+            title={
+              detailJob && shipAlreadyDone(detailJob)
+                ? 'Already merged'
+                : integrateLabel(detailJob)
             }
           >
-            Create PR
-          </Button>
+            <span>
+              <Button
+                size="small"
+                variant="contained"
+                color="secondary"
+                startIcon={<CallMergeIcon />}
+                disabled={
+                  !detailJob ||
+                  !canCreatePr(detailJob) ||
+                  shipAlreadyDone(detailJob) ||
+                  jobActionBusy
+                }
+                onClick={() =>
+                  detailJobId && requestAction('create-pr', detailJobId)
+                }
+              >
+                {integrateLabel(detailJob)}
+              </Button>
+            </span>
+          </Tooltip>
           <Button
             size="small"
             color="error"
@@ -1539,12 +1780,102 @@ export function JobsPage() {
           <Button variant="contained" onClick={closeDetail}>
             Close
           </Button>
+        </Box>
+      </Drawer>
+
+      <Dialog
+        open={
+          pendingAction === 'create-pr' &&
+          (shipLoading || shipFiles.length > 0 || !!shipError)
+        }
+        onClose={() => {
+          if (!jobActionBusy) {
+            setPendingAction(null);
+            setActionTargetId(null);
+            clearShip();
+          }
+        }}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Commit and merge?</DialogTitle>
+        <DialogContent>
+          {shipLoading ? (
+            <Typography variant="body2">Checking the worktree…</Typography>
+          ) : shipError ? (
+            <Alert severity="warning">{shipError}</Alert>
+          ) : (
+            <Stack spacing={1.5}>
+              <Typography variant="body2">
+                Commit these files on{' '}
+                {[...new Set(shipFiles.map((f) => f.branch))].join(', ')}, then
+                merge into{' '}
+                {[...new Set(shipFiles.map((f) => f.base).filter(Boolean))].join(
+                  ', ',
+                )}
+                . Cancel leaves the worktree unchanged.
+              </Typography>
+              {shipFiles.map((f) => (
+                <Typography
+                  key={`${f.repo}:${f.path}`}
+                  variant="caption"
+                  component="div"
+                  sx={{ fontFamily: 'ui-monospace, Menlo, monospace' }}
+                >
+                  {f.repo}: {f.path}
+                </Typography>
+              ))}
+              <TextField
+                label="Commit message"
+                value={shipMessage}
+                onChange={(e) => setShipMessage(e.target.value)}
+                multiline
+                minRows={3}
+                fullWidth
+                size="small"
+              />
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              if (!jobActionBusy) {
+                setPendingAction(null);
+                setActionTargetId(null);
+                clearShip();
+              }
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="secondary"
+            disabled={
+              jobActionBusy ||
+              shipLoading ||
+              !!shipError ||
+              shipFiles.length === 0 ||
+              !shipMessage.trim()
+            }
+            onClick={() => void executePendingAction()}
+          >
+            {jobActionBusy ? 'Working…' : 'Commit and merge'}
+          </Button>
         </DialogActions>
       </Dialog>
 
       {/* Confirm modal for Stop / Resume / Re-run / Create PR / Delete */}
       <ConfirmDialog
-        open={!!pendingAction && !!actionTargetId}
+        open={
+          !!pendingAction &&
+          !!actionTargetId &&
+          !(
+            pendingAction === 'create-pr' &&
+            (shipLoading || shipFiles.length > 0 || !!shipError)
+          )
+        }
         title={pendingCopy?.title ?? 'Confirm'}
         message={
           pendingCopy && actionTargetId
@@ -1560,6 +1891,7 @@ export function JobsPage() {
           if (!jobActionBusy) {
             setPendingAction(null);
             setActionTargetId(null);
+            clearShip();
           }
         }}
       />

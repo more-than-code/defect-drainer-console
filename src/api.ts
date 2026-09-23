@@ -115,6 +115,8 @@ export type BatchJobPr = {
   mergedAt?: string | null;
   checkedAt?: string;
   ghError?: string;
+  /** pr = GitHub pull request; merge = local base branch. Absent on older rows. */
+  kind?: 'pr' | 'merge' | string;
 };
 
 export type BatchJob = {
@@ -137,6 +139,12 @@ export type BatchJob = {
     worktreeAbs: string;
     branch: string;
     repoUrl?: string;
+    /** Commit-ish the job branch was cut from. */
+    baseRef?: string;
+    /** Branch a PR or local merge targets. */
+    baseBranch?: string;
+    /** local = merge into the checkout; origin = GitHub pull request. */
+    baseSource?: 'local' | 'origin' | string;
   }>;
   prs?: BatchJobPr[];
   verification?: BatchJobVerification;
