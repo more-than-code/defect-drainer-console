@@ -7,6 +7,7 @@ import { DefectsPage } from './pages/DefectsPage';
 import { JobsPage } from './pages/JobsPage';
 import { OnboardingPage } from './pages/OnboardingPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { TestsPage } from './pages/TestsPage';
 
 export function App() {
   return (
@@ -20,6 +21,7 @@ export function App() {
               <Route path="defects" element={<Navigate to="/" replace />} />
               <Route path="report" element={<Navigate to="/" replace />} />
               <Route path="jobs" element={<JobsPage />} />
+              <Route path="tests" element={<TestsPage />} />
               <Route path="analytics" element={<AnalyticsPage />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>

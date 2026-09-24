@@ -51,3 +51,7 @@ Each repo row is **Name → Base source → Location → Base branch**. Switchin
 ### Defect evidence
 
 Thumbs stay in the defect dialog. Full-size browse is `EvidenceGallery` (modal only).
+
+### Tests page
+
+`/tests` is a `ListPage` with **Runs** and **Plans** tabs (`?tab=plans`). `?run=<TRUN-id>` opens the run drawer; `?plan=<TPLAN-id>` opens the plan dialog. Step screenshots are uploaded while a run is `in_progress`, multipart field `file`, to `POST /api/test-runs/{id}/steps/{key}/evidence`. Paste applies to the step marked as the paste target. Test accounts are label, username, environment, and `secret_ref` only — never add a password field.

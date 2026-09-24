@@ -15,6 +15,7 @@ import { useColorMode } from './ColorModeContext';
 const nav = [
   { to: '/', label: 'Defects' },
   { to: '/jobs', label: 'Jobs' },
+  { to: '/tests', label: 'Tests' },
   { to: '/analytics', label: 'Analytics' },
   { to: '/settings', label: 'Settings' },
 ];

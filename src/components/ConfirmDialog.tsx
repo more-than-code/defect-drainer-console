@@ -15,6 +15,8 @@ type ConfirmDialogProps = {
   details?: ReactNode;
   confirmLabel: string;
   cancelLabel: string;
+  /** When true the confirm button waits for an in-flight write. */
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -26,6 +28,7 @@ export function ConfirmDialog({
   details,
   confirmLabel,
   cancelLabel,
+  confirmDisabled,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -38,7 +41,7 @@ export function ConfirmDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={onCancel}>{cancelLabel}</Button>
-        <Button color="error" variant="contained" onClick={onConfirm}>
+        <Button color="error" variant="contained" disabled={confirmDisabled} onClick={onConfirm}>
           {confirmLabel}
         </Button>
       </DialogActions>

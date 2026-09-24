@@ -38,6 +38,8 @@ export type AppRecord = {
   agent_max_turns?: number;
   /** Commands DD re-runs after a fix job; all must pass before a defect resolves */
   verify_commands?: VerifyCommand[];
+  /** Operator login hints. Passwords are never stored. */
+  test_accounts?: TestAccount[];
   /** App-level fallback when a repo entry has no source of its own. */
   base_remote?: string;
   /** App-level fallback branch. */
@@ -281,6 +283,114 @@ export type BatchJobVerification = {
   results: VerifyResult[];
   startedAt: string;
   finishedAt: string;
+};
+
+/** Operator login hint. A password is never a field. */
+export type TestAccount = {
+  label: string;
+  username: string;
+  environment: string;
+  secret_ref: string;
+};
+
+export type TestPlanStep = {
+  key: string;
+  position: number;
+  section: string;
+  action: string;
+  expected: string;
+};
+
+/** Detail responses include `steps`. List rows include `step_count` and omit `steps`. */
+export type TestPlan = {
+  id: string;
+  app_id: string;
+  key: string;
+  title: string;
+  purpose: string;
+  env: Record<string, unknown>;
+  version: number;
+  archived: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  steps?: TestPlanStep[];
+  step_count?: number;
+};
+
+export type TestStepStatus =
+  | 'pass'
+  | 'fail'
+  | 'blocked'
+  | 'skipped'
+  | 'pending'
+  | 'unverified'
+  | string;
+
+export type TestRunStatus =
+  | 'in_progress'
+  | 'awaiting_review'
+  | 'reviewed'
+  | 'abandoned'
+  | 'queued'
+  | string;
+
+export type TestStepReview = '' | 'accepted' | 'disputed' | string;
+
+export type TestRunStep = {
+  key: string;
+  position: number;
+  section: string;
+  action: string;
+  expected: string;
+  exploratory: boolean;
+  status: TestStepStatus;
+  actual: string;
+  evidence: string[];
+  defect_id: string | null;
+  review: TestStepReview;
+  review_note: string;
+  updated_at: string;
+};
+
+export type TestRunProgress = {
+  total: number;
+  pending: number;
+  pass: number;
+  fail: number;
+  blocked: number;
+  skipped: number;
+  unverified: number;
+};
+
+export type TestRunRef = {
+  repo: string;
+  ref: string;
+  sha?: string;
+};
+
+/** Detail responses include `steps`. List rows keep `progress` and omit `steps`. */
+export type TestRun = {
+  id: string;
+  app_id: string;
+  plan_id: string | null;
+  plan_version: number | null;
+  title: string;
+  executor: 'operator' | 'agent-session' | string;
+  executed_by: string;
+  job_id: string | null;
+  env: Record<string, unknown>;
+  refs: TestRunRef[];
+  status: TestRunStatus;
+  reviewed_by: string;
+  reviewed_at: string | null;
+  review_note: string;
+  started_at: string;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+  progress: TestRunProgress;
+  steps?: TestRunStep[];
 };
 
 export async function api<T>(path: string, opts?: RequestInit): Promise<T> {

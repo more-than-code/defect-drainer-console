@@ -34,7 +34,12 @@ import {
   type AgentToolchain,
   type VerifyCommand,
   type GrokSandboxProfile,
+  type TestAccount,
 } from '../api';
+import {
+  TestAccountsEditor,
+  testAccountsForSave,
+} from '../components/tests/TestAccountsEditor';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { getOperatorName, setOperatorName } from '../operator';
 import { ErrorState } from '../components/ErrorState';
@@ -145,6 +150,9 @@ export function SettingsPage() {
   // Empty string means "unset" — the server falls back to its own default.
   const [agentMaxTurns, setAgentMaxTurns] = useState('');
   const [verifyCommands, setVerifyCommands] = useState<VerifyCommand[]>([]);
+  const [testAccounts, setTestAccounts] = useState<TestAccount[]>([]);
+  // Set only after GET /api/apps has applied this app. A failed first load must not PATCH [].
+  const [loadedAppId, setLoadedAppId] = useState<string | null>(null);
   const [workspaceRoot, setWorkspaceRoot] = useState('');
   const [branchLoads, setBranchLoads] = useState<Record<number, BranchLoad>>(
     {},
@@ -166,6 +174,7 @@ export function SettingsPage() {
     setAllowSimulatorWrites(!!app.allow_simulator_writes);
     setAgentMaxTurns(app.agent_max_turns ? String(app.agent_max_turns) : '');
     setVerifyCommands(app.verify_commands ?? []);
+    setTestAccounts((app.test_accounts ?? []).map((account) => ({ ...account })));
     setWorkspaceRoot(app.workspace_root || '');
     setIsDefault(!!app.default);
   }, []);
@@ -176,7 +185,10 @@ export function SettingsPage() {
         '/api/apps',
       );
       const app = res.apps.find((a) => a.id === appId);
-      applyApp(app);
+      if (app) {
+        applyApp(app);
+        setLoadedAppId(appId);
+      }
       setError('');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -366,6 +378,9 @@ export function SettingsPage() {
           verify_commands: verifyCommands.filter(
             (v) => v.repo.trim() && v.command.trim(),
           ),
+          ...(loadedAppId === appId
+            ? { test_accounts: testAccountsForSave(testAccounts) }
+            : {}),
           default: isDefault,
         }),
       });
@@ -825,6 +840,8 @@ export function SettingsPage() {
               </FormHelperText>
             ) : null}
           </Box>
+
+          <TestAccountsEditor accounts={testAccounts} onChange={setTestAccounts} />
 
           <FormControlLabel
             control={
