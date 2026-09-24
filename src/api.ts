@@ -159,6 +159,23 @@ export type BatchJob = {
   rerunnable?: RestartCheck;
 };
 
+/** What deleting a job does (delete-preview) or did (DELETE) to one repo. */
+export type WorktreeDiscard = {
+  repo: string;
+  worktree: string;
+  /** Still a usable checkout. */
+  present: boolean;
+  /** Up to 50 uncommitted paths that deleting discards. */
+  uncommitted?: string[];
+  uncommittedCount: number;
+  branch: string;
+  /** Commits on the branch not in its base, HEAD or upstream; -1 unknown. */
+  unmerged: number;
+  branchAction: 'delete' | 'keep' | 'none' | string;
+  reason?: string;
+  error?: string;
+};
+
 /** Whether a restart is allowed; `reason` says why not, for the operator. */
 export type RestartCheck = { ok: boolean; reason?: string };
 

@@ -39,6 +39,7 @@ import {
   type DiffHygieneReport,
   type VerifyResult,
   type BatchRecord,
+  type WorktreeDiscard,
 } from '../api';
 import {
   AdminDataGrid,
@@ -565,6 +566,65 @@ function PrRow({ p }: { p: BatchJobPr }) {
   );
 }
 
+/** One repo's outcome, for the post-delete message. */
+function discardSummary(d: WorktreeDiscard): string {
+  if (d.error) return `${d.repo}: ${d.error}`;
+  if (d.branchAction === 'delete') return `${d.repo}: worktree and branch removed`;
+  if (d.branchAction === 'keep')
+    return `${d.repo}: worktree removed, branch ${d.branch} kept (${d.reason ?? 'unmerged'})`;
+  return `${d.repo}: worktree removed`;
+}
+
+/** What Delete will discard, per repo, shown in the confirm dialog. */
+function DeletePreviewList({
+  repos,
+  error,
+}: {
+  repos: WorktreeDiscard[] | null;
+  error: string;
+}) {
+  if (error)
+    return (
+      <Alert severity="warning" sx={{ mt: 1.5 }}>
+        Could not check the worktrees: {error}
+      </Alert>
+    );
+  if (!repos)
+    return (
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
+        Checking worktrees…
+      </Typography>
+    );
+  return (
+    <Stack spacing={1} sx={{ mt: 1.5 }}>
+      {repos.map((d) => (
+        <Box key={d.repo}>
+          <Typography variant="subtitle2">{d.repo}</Typography>
+          {d.uncommittedCount > 0 ? (
+            <Typography variant="body2" color="warning.main">
+              {d.uncommittedCount} uncommitted file(s) will be discarded:{' '}
+              {(d.uncommitted ?? []).slice(0, 5).join(', ')}
+              {d.uncommittedCount > 5 ? ', …' : ''}
+            </Typography>
+          ) : null}
+          <Typography variant="body2" color="text.secondary">
+            {d.branchAction === 'delete'
+              ? `Branch ${d.branch} will be deleted (merged).`
+              : d.branchAction === 'keep'
+                ? `Branch ${d.branch} will be kept: ${d.reason ?? 'unmerged commits'}.`
+                : `Branch: ${d.reason ?? 'nothing to delete'}.`}
+          </Typography>
+          {d.error ? (
+            <Typography variant="body2" color="error.main">
+              {d.error}
+            </Typography>
+          ) : null}
+        </Box>
+      ))}
+    </Stack>
+  );
+}
+
 const ACTION_COPY: Record<
   JobAction,
   { title: string; message: (id: string) => string; confirm: string }
@@ -596,7 +656,7 @@ const ACTION_COPY: Record<
   delete: {
     title: 'Delete this batch job?',
     message: (id) =>
-      `Remove ${id} and clean up handoff artifacts (worktrees, BRIEF, logs). Product defects and inventory evidence are kept.`,
+      `Remove ${id}: its handoff folder (BRIEF, logs, notes) and its worktrees, which are also unregistered from each product repo. A job branch is deleted only if it is merged. Product defects and inventory evidence are kept.`,
     confirm: 'Delete',
   },
 };
@@ -623,6 +683,13 @@ export function JobsPage() {
   const [shipMessage, setShipMessage] = useState('');
   const [shipLoading, setShipLoading] = useState(false);
   const [shipError, setShipError] = useState('');
+  const [deletePreview, setDeletePreview] = useState<WorktreeDiscard[] | null>(
+    null,
+  );
+  const [deletePreviewError, setDeletePreviewError] = useState('');
+  // The job a delete preview was requested for; a slower response for an
+  // earlier job must not land in this job's confirm dialog.
+  const deletePreviewFor = useRef<string | null>(null);
   const [jobActionBusy, setJobActionBusy] = useState(false);
   const [jobActionMsg, setJobActionMsg] = useState('');
   const [loading, setLoading] = useState(true);
@@ -758,6 +825,9 @@ export function JobsPage() {
     setShipMessage('');
     setShipLoading(false);
     setShipError('');
+    setDeletePreview(null);
+    setDeletePreviewError('');
+    deletePreviewFor.current = null;
   }, []);
 
   const requestAction = useCallback(
@@ -765,6 +835,20 @@ export function JobsPage() {
       setActionTargetId(jobId);
       setPendingAction(action);
       clearShip();
+      if (action === 'delete') {
+        deletePreviewFor.current = jobId;
+        void api<{ repos: WorktreeDiscard[] }>(
+          `/api/batch-jobs/${encodeURIComponent(jobId)}/delete-preview`,
+        )
+          .then((res) => {
+            if (deletePreviewFor.current === jobId) setDeletePreview(res.repos);
+          })
+          .catch((e) => {
+            if (deletePreviewFor.current === jobId)
+              setDeletePreviewError(e instanceof Error ? e.message : String(e));
+          });
+        return;
+      }
       if (action !== 'create-pr') return;
       const job =
         batchJobs.find((j) => j.jobId === jobId) ||
@@ -867,13 +951,16 @@ export function JobsPage() {
     setJobActionMsg('');
     try {
       if (action === 'delete') {
-        await api(`/api/batch-jobs/${encodeURIComponent(id)}`, {
-          method: 'DELETE',
-        });
+        const { cleanup } = await api<{ cleanup?: WorktreeDiscard[] }>(
+          `/api/batch-jobs/${encodeURIComponent(id)}`,
+          { method: 'DELETE' },
+        );
         setPendingAction(null);
         setActionTargetId(null);
+        clearShip();
         if (detailJobId === id) closeDetail();
-        setJobActionMsg(`Deleted ${id}`);
+        const done = (cleanup ?? []).map(discardSummary).join(' · ');
+        setJobActionMsg(`Deleted ${id}${done ? ` — ${done}` : ''}`);
         await refresh();
         return;
       }
@@ -1330,6 +1417,17 @@ export function JobsPage() {
       }
       error={error || null}
     >
+      {jobActionMsg && !detailOpen ? (
+        // With the drawer closed (e.g. after Delete) the drawer's copy of this
+        // message is not on screen, so the list shows it.
+        <Alert
+          severity={/fail|error|cannot|invalid/i.test(jobActionMsg) ? 'warning' : 'info'}
+          onClose={() => setJobActionMsg('')}
+          sx={{ mb: 2 }}
+        >
+          {jobActionMsg}
+        </Alert>
+      ) : null}
       <Box sx={{ mb: 2 }}>
         <AdminDataGrid
           aria-label="Batch jobs"
@@ -1881,6 +1979,14 @@ export function JobsPage() {
           pendingCopy && actionTargetId
             ? pendingCopy.message(actionTargetId)
             : ''
+        }
+        details={
+          pendingAction === 'delete' ? (
+            <DeletePreviewList
+              repos={deletePreview}
+              error={deletePreviewError}
+            />
+          ) : undefined
         }
         confirmLabel={
           jobActionBusy ? 'Working…' : (pendingCopy?.confirm ?? 'Confirm')

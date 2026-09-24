@@ -5,11 +5,14 @@ import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogContentText from '@mui/material/DialogContentText';
 import DialogTitle from '@mui/material/DialogTitle';
+import type { ReactNode } from 'react';
 
 type ConfirmDialogProps = {
   open: boolean;
   title: string;
   message: string;
+  /** Optional extra content under the message (e.g. what will be removed). */
+  details?: ReactNode;
   confirmLabel: string;
   cancelLabel: string;
   onConfirm: () => void;
@@ -20,6 +23,7 @@ export function ConfirmDialog({
   open,
   title,
   message,
+  details,
   confirmLabel,
   cancelLabel,
   onConfirm,
@@ -30,6 +34,7 @@ export function ConfirmDialog({
       <DialogTitle>{title}</DialogTitle>
       <DialogContent>
         <DialogContentText>{message}</DialogContentText>
+        {details}
       </DialogContent>
       <DialogActions>
         <Button onClick={onCancel}>{cancelLabel}</Button>
