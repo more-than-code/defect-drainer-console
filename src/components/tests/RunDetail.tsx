@@ -44,6 +44,7 @@ export function RunDetail({
   onReview,
   onReviewNote,
   onViewerChange,
+  onFileDefect,
 }: {
   loading: boolean;
   loadError: string;
@@ -73,6 +74,7 @@ export function RunDetail({
   onReview: (key: string, review: 'accepted' | 'disputed') => void;
   onReviewNote: (key: string, note: string) => void;
   onViewerChange: (stepKey: string, open: boolean) => void;
+  onFileDefect: (step: TestRunStep) => void;
 }) {
   const steps = run?.steps ?? [];
   const progress = run?.progress;
@@ -163,6 +165,7 @@ export function RunDetail({
               key={step.key}
               step={step}
               mode={mode}
+              runStatus={run?.status ?? ''}
               pasteTarget={pasteTarget === step.key}
               busy={busy}
               reviewValue={reviewDraft[step.key]?.review ?? ''}
@@ -174,6 +177,7 @@ export function RunDetail({
               onReview={(review) => onReview(step.key, review)}
               onReviewNote={(note) => onReviewNote(step.key, note)}
               onViewerChange={onViewerChange}
+              onFileDefect={() => onFileDefect(step)}
             />
           ))}
           {!steps.length ? (

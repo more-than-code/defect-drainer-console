@@ -7,11 +7,12 @@ import Stack from '@mui/material/Stack';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, type TestPlan, type TestRun } from '../../api';
+import { api, type FileDefectResponse, type TestPlan, type TestRun } from '../../api';
 import { getOperatorName } from '../../operator';
 import { absoluteLocal, relativeTime } from '../../relativeTime';
 import { compactChipSx, runStatusColor, runStatusLabel } from '../../testStatus';
 import { errorMessage, jsonRequest } from './format';
+import { FileDefectDialog, type FileDefectBody } from './FileDefectDialog';
 import { useRunWrites } from './useRunWrites';
 import { RunActions, RunConfirmDialogs } from './RunActions';
 import { RunDetail } from './RunDetail';
@@ -53,6 +54,14 @@ export function RunDrawer({
   const [addSection, setAddSection] = useState('');
   const [reviewDraft, setReviewDraft] = useState<ReviewDraft>({});
   const [saveOpen, setSaveOpen] = useState(false);
+  const [fileStepKey, setFileStepKey] = useState<string | null>(null);
+  const fileGen = useRef(0);
+  const fileGenKey = useRef(`${runId ?? ''}::${fileStepKey ?? ''}`);
+  const nextFileGenKey = `${runId ?? ''}::${fileStepKey ?? ''}`;
+  if (fileGenKey.current !== nextFileGenKey) {
+    fileGenKey.current = nextFileGenKey;
+    fileGen.current += 1;
+  }
   const [now, setNow] = useState(() => Date.now());
   const readToken = useRef(0);
   const busyEpoch = useRef(0);
@@ -90,6 +99,7 @@ export function RunDrawer({
     setConfirm(null);
     setAddOpen(false);
     setSaveOpen(false);
+    setFileStepKey(null);
     draftRun.current = null;
     if (!runId) {
       setRun(null);
@@ -298,6 +308,19 @@ export function RunDrawer({
     }
   }
 
+  async function fileDefect(body: FileDefectBody) {
+    if (!runId || !fileStepKey) throw new Error('Run is closed');
+    const id = runId;
+    const key = fileStepKey;
+    const next = await writeRun(id, () =>
+      api<FileDefectResponse>(
+        `/api/test-runs/${encodeURIComponent(id)}/steps/${encodeURIComponent(key)}/file-defect`,
+        jsonRequest('POST', body),
+      ).then((res) => res.run),
+    );
+    if (!next) throw new Error('Run changed');
+  }
+
   async function submitReview() {
     if (!run || !runId) return;
     const reviewer = getOperatorName().trim();
@@ -333,6 +356,9 @@ export function RunDrawer({
 
   const status = run?.status ?? '';
   const mode = status === 'in_progress' ? 'edit' : status === 'awaiting_review' ? 'review' : 'readonly';
+  const fileStep = fileStepKey
+    ? (run?.steps ?? []).find((step) => step.key === fileStepKey) ?? null
+    : null;
   const operator = getOperatorName().trim();
   const source = run?.plan_id ? plans.find((plan) => plan.id === run.plan_id) : undefined;
   const steps = run?.steps ?? [];
@@ -456,6 +482,7 @@ export function RunDrawer({
             }))
           }
           onViewerChange={applyViewer}
+          onFileDefect={(step) => setFileStepKey(step.key)}
         />
       </Drawer>
       <RunConfirmDialogs
@@ -487,6 +514,18 @@ export function RunDrawer({
           onChanged();
         }}
       />
+      {run && fileStep ? (
+        <FileDefectDialog
+          key={`${run.id}:${fileStep.key}`}
+          open
+          run={run}
+          step={fileStep}
+          busy={busy}
+          generation={fileGen}
+          onClose={() => setFileStepKey(null)}
+          onSubmit={fileDefect}
+        />
+      ) : null}
     </>
   );
 }

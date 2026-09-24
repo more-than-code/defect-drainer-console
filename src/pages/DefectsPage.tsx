@@ -6,6 +6,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
+import Link from '@mui/material/Link';
 import Button from '@mui/material/Button';
 import Checkbox from '@mui/material/Checkbox';
 import Chip from '@mui/material/Chip';
@@ -110,6 +111,22 @@ function evidenceItems(rels: string[]): { url: string; alt: string }[] {
     if (url) items.push({ url, alt: rel });
   }
   return items;
+}
+
+/** `TRUN-…/steps/<key>` entries filed from a test run. */
+function testRunStepLinks(
+  related: string[] | undefined,
+): Array<{ raw: string; runId: string; stepKey: string }> {
+  const hits: Array<{ raw: string; runId: string; stepKey: string }> = [];
+  const seen = new Set<string>();
+  for (const raw of related ?? []) {
+    if (seen.has(raw)) continue;
+    const match = /^(TRUN-[^/]+)\/steps\/(.+)$/.exec(raw);
+    if (!match) continue;
+    seen.add(raw);
+    hits.push({ raw, runId: match[1], stepKey: match[2] });
+  }
+  return hits;
 }
 
 function appRepoUrlText(app: AppRecord | undefined): string {
@@ -887,6 +904,18 @@ export function DefectsPage() {
                 })()}
                 {detail.source ? ` · ${detail.source}` : ''}
               </Typography>
+              {testRunStepLinks(detail.related).map((hit) => (
+                <Typography key={hit.raw} variant="body2">
+                  Found by test run{' '}
+                  <Link
+                    component={RouterLink}
+                    to={`/tests?run=${encodeURIComponent(hit.runId)}`}
+                  >
+                    {hit.runId}
+                  </Link>
+                  , step {hit.stepKey}
+                </Typography>
+              ))}
               <Box>
                 <Typography variant="subtitle2" gutterBottom>
                   Linked jobs

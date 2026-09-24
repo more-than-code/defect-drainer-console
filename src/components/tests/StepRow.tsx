@@ -10,6 +10,7 @@ import Typography from '@mui/material/Typography';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { evidenceUrl, type TestRunStep } from '../../api';
 import { EvidenceGallery } from '../EvidenceGallery';
+import { DefectLinkChip } from './DefectLinkChip';
 import {
   REVIEW_VALUES,
   STEP_RESULT_VALUES,
@@ -24,6 +25,7 @@ import {
 export function StepRow({
   step,
   mode,
+  runStatus,
   pasteTarget,
   busy,
   reviewValue,
@@ -35,14 +37,17 @@ export function StepRow({
   onReview,
   onReviewNote,
   onViewerChange,
+  onFileDefect,
 }: {
   step: TestRunStep;
   mode: 'edit' | 'review' | 'readonly';
+  runStatus: string;
   pasteTarget: boolean;
   busy: boolean;
   reviewValue: '' | 'accepted' | 'disputed';
   reviewNote: string;
   onActivate: () => void;
+  onFileDefect: () => void;
   onStatus: (status: string) => void;
   onActual: (actual: string) => Promise<boolean>;
   onFiles: (files: File[]) => void;
@@ -65,6 +70,10 @@ export function StepRow({
     return url ? [{ url, alt: rel }] : [];
   });
   const offered = STEP_RESULT_VALUES.some((value) => value === step.status);
+  const canFile =
+    runStatus !== 'abandoned' &&
+    !step.defect_id &&
+    (step.status === 'fail' || step.status === 'blocked');
 
   useEffect(() => {
     pendingActual.current = null;
@@ -111,6 +120,24 @@ export function StepRow({
         ) : null}
         {mode === 'edit' && pasteTarget ? (
           <Chip size="small" variant="outlined" color="primary" label="Paste target" sx={compactChipSx} />
+        ) : null}
+        {step.defect_id ? (
+          <DefectLinkChip id={step.defect_id} status={step.defect_status} />
+        ) : null}
+        {canFile ? (
+          <Button
+            size="small"
+            variant="outlined"
+            disabled={busy}
+            aria-label={`File defect for step ${step.position}: ${step.action}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onFileDefect();
+            }}
+            sx={{ py: 0.25 }}
+          >
+            File defect
+          </Button>
         ) : null}
       </Stack>
       {step.section ? (

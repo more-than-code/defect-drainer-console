@@ -15,6 +15,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { FilterSelect } from '../components/FilterSelect';
 import { ListPage } from '../components/ListPage';
 import { PlanDialog } from '../components/tests/PlanDialog';
+import { PlanHistoryDialog } from '../components/tests/PlanHistoryDialog';
 import { RunDrawer } from '../components/tests/RunDrawer';
 import { StartRunDialog } from '../components/tests/StartRunDialog';
 import { planColumns, runColumns } from '../components/tests/testColumns';
@@ -53,6 +54,7 @@ export function TestsPage() {
   const tab = searchParams.get('tab') === 'plans' ? 'plans' : 'runs';
   const runParam = searchParams.get('run');
   const planParam = searchParams.get('plan');
+  const historyParam = searchParams.get('history');
 
   const refresh = useCallback(async () => {
     const requested = appNow.current;
@@ -116,6 +118,7 @@ export function TestsPage() {
         const next = new URLSearchParams(prev);
         next.delete('run');
         next.delete('plan');
+        next.delete('history');
         return next;
       },
       { replace: true },
@@ -179,6 +182,30 @@ export function TestsPage() {
         if (!prev.get('plan')) return prev;
         const params = new URLSearchParams(prev);
         params.delete('plan');
+        return params;
+      },
+      { replace: true },
+    );
+  }
+
+  function openHistory(id: string) {
+    setSearchParams(
+      (prev) => {
+        const params = new URLSearchParams(prev);
+        params.set('tab', 'plans');
+        params.set('history', id);
+        return params;
+      },
+      { replace: true },
+    );
+  }
+
+  function closeHistory() {
+    setSearchParams(
+      (prev) => {
+        if (!prev.get('history')) return prev;
+        const params = new URLSearchParams(prev);
+        params.delete('history');
         return params;
       },
       { replace: true },
@@ -260,6 +287,7 @@ export function TestsPage() {
           setStartOpen(true);
         },
         onEdit: (plan) => openEdit(plan.id),
+        onHistory: (plan) => openHistory(plan.id),
         onRemove: (plan) => setRemovePlan(plan),
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -284,7 +312,20 @@ export function TestsPage() {
             : `Removed “${name}”.`,
       });
       setRemovePlan(null);
-      if (planParam === removePlan.id) closePlan();
+      const dropPlan = planParam === removePlan.id;
+      const dropHistory = historyParam === removePlan.id;
+      if (dropPlan) setCreateOpen(false);
+      if (dropPlan || dropHistory) {
+        setSearchParams(
+          (prev) => {
+            const params = new URLSearchParams(prev);
+            if (dropPlan) params.delete('plan');
+            if (dropHistory) params.delete('history');
+            return params;
+          },
+          { replace: true },
+        );
+      }
       await refresh();
     } catch (e) {
       setNotice({ severity: 'error', text: errorMessage(e) });
@@ -422,12 +463,26 @@ export function TestsPage() {
         open={Boolean(planParam) || createOpen}
         planId={planParam}
         onClose={closePlan}
+        onHistory={planParam ? () => openHistory(planParam) : undefined}
         onSaved={(message) => {
           setNotice({ severity: 'info', text: message });
           closePlan();
           void refresh();
         }}
       />
+      {historyParam ? (
+        <PlanHistoryDialog
+          key={historyParam}
+          open
+          planId={historyParam}
+          now={now}
+          onClose={closeHistory}
+          onOpenRun={() => {
+            setSeed(null);
+            setCreateOpen(false);
+          }}
+        />
+      ) : null}
       <RunDrawer
         runId={runParam}
         seed={seed?.id === runParam ? seed : null}

@@ -32,7 +32,8 @@ export function useRunWrites(
         if (refs.runIdRef.current !== id) return null;
         try {
           const value = await exec();
-          if (refs.runIdRef.current !== id || refs.busyEpoch.current !== token) return value;
+          // A superseded write must not look applied. Callers treat null as "not this run".
+          if (refs.runIdRef.current !== id || refs.busyEpoch.current !== token) return null;
           apply?.(value);
           setPollError('');
           return value;

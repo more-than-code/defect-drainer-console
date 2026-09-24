@@ -56,12 +56,14 @@ export type Defect = {
   summary: string;
   client: string;
   surface: string;
-  /** How it was detected: detector or lens name (`parity-review`, `console`). */
+  /** How it was detected: detector or lens name (`parity-review`, `console`, `test-run`). */
   source?: string;
   /** Who filed it: operator name or agent tool. Empty on pre-existing records. */
   reporter?: string;
   /** Related repo names (from Report ticks) */
   repos?: string[];
+  /** Cross-links. Filed from a test run: `<TRUN-id>/steps/<step key>`. */
+  related?: string[];
   /** Report-time screenshots */
   evidence: string[];
   /** Post-fix proof (required to resolve) */
@@ -348,6 +350,8 @@ export type TestRunStep = {
   actual: string;
   evidence: string[];
   defect_id: string | null;
+  /** Status of the linked defect. Null when there is no link, or the defect was deleted. */
+  defect_status: string | null;
   review: TestStepReview;
   review_note: string;
   updated_at: string;
@@ -391,6 +395,86 @@ export type TestRun = {
   updated_at: string;
   progress: TestRunProgress;
   steps?: TestRunStep[];
+};
+
+export type PlanGridPlan = {
+  id: string;
+  key: string;
+  title: string;
+  version: number;
+};
+
+export type PlanGridRun = {
+  id: string;
+  title: string;
+  plan_version: number;
+  started_at: string;
+  reviewed_at: string;
+  reviewed_by: string;
+  refs: TestRunRef[];
+};
+
+export type PlanGridDefect = {
+  id: string;
+  status: string;
+  run_id: string;
+};
+
+export type PlanGridCell = {
+  run_id: string;
+  status: string;
+  review: string;
+  defect_id: string | null;
+};
+
+export type PlanGridStep = {
+  key: string;
+  position: number;
+  section: string;
+  action: string;
+  needs_retest: boolean;
+  defects: PlanGridDefect[];
+  /** Aligned with `runs`. Null when that run has no step with this key. */
+  cells: Array<PlanGridCell | null>;
+};
+
+/** `GET /api/test-plans/{id}/grid` — the `grid` object. */
+export type PlanGrid = {
+  plan: PlanGridPlan;
+  runs: PlanGridRun[];
+  steps: PlanGridStep[];
+};
+
+/** Defect body on a file-defect 201. Fields match that response. */
+export type FiledTestDefect = {
+  id: string;
+  app_id: string;
+  title: string;
+  severity: string;
+  status: string;
+  area: string;
+  client: string;
+  surface: string;
+  repos: string[];
+  labels: string[];
+  related: string[];
+  source: string;
+  reporter: string;
+  key_files: string[];
+  evidence: string[];
+  fix_evidence: string[];
+  reported: string;
+  summary: string;
+  body: string;
+  bucket: string;
+  created_at: string;
+  path: string;
+};
+
+/** `POST /api/test-runs/{id}/steps/{key}/file-defect` — 201. */
+export type FileDefectResponse = {
+  defect: FiledTestDefect;
+  run: TestRun;
 };
 
 export async function api<T>(path: string, opts?: RequestInit): Promise<T> {

@@ -161,6 +161,7 @@ export function planColumns(opts: {
   narrow: boolean;
   onStart: (plan: TestPlan) => void;
   onEdit: (plan: TestPlan) => void;
+  onHistory: (plan: TestPlan) => void;
   onRemove: (plan: TestPlan) => void;
 }): GridColDef<TestPlan>[] {
   const columns: GridColDef<TestPlan>[] = [
@@ -220,8 +221,8 @@ export function planColumns(opts: {
     {
       field: 'actions',
       headerName: 'Actions',
-      flex: opts.narrow ? 1.2 : 1,
-      minWidth: opts.narrow ? 148 : 188,
+      flex: opts.narrow ? 1.4 : 1.2,
+      minWidth: opts.narrow ? 220 : 268,
       sortable: false,
       filterable: false,
       renderCell: ({ row }) => (
@@ -252,6 +253,17 @@ export function planColumns(opts: {
             sx={{ minWidth: 0, px: 0.75 }}
           >
             Edit
+          </Button>
+          <Button
+            size="small"
+            aria-label={`History for ${row.title.trim() || row.key}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              opts.onHistory(row);
+            }}
+            sx={{ minWidth: 0, px: 0.75 }}
+          >
+            History
           </Button>
           <Button
             size="small"

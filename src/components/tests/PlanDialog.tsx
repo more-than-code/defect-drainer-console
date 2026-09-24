@@ -51,12 +51,15 @@ export function PlanDialog({
   planId,
   onClose,
   onSaved,
+  onHistory,
 }: {
   open: boolean;
   /** Null creates a plan. An id loads that plan for edit. */
   planId: string | null;
   onClose: () => void;
   onSaved: (message: string) => void;
+  /** Opens the reviewed-run history for this plan. Hidden while creating. */
+  onHistory?: () => void;
 }) {
   const { appId, app } = useAppContext();
   const accounts = app?.test_accounts ?? [];
@@ -227,6 +230,13 @@ export function PlanDialog({
       fullWidth
     >
       <DialogTitle>{creating ? 'New plan' : 'Edit plan'}</DialogTitle>
+      {!creating && onHistory ? (
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', px: 3, mt: -1 }}>
+          <Button type="button" size="small" onClick={onHistory}>
+            History
+          </Button>
+        </Box>
+      ) : null}
       <DialogContent>
         {loading ? (
           <LoadingState />
