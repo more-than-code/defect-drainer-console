@@ -5,11 +5,16 @@
 import CallMergeIcon from '@mui/icons-material/CallMerge';
 import CloseIcon from '@mui/icons-material/Close';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import ReplayIcon from '@mui/icons-material/Replay';
 import StopIcon from '@mui/icons-material/Stop';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import Accordion from '@mui/material/Accordion';
+import AccordionDetails from '@mui/material/AccordionDetails';
+import AccordionSummary from '@mui/material/AccordionSummary';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -20,23 +25,35 @@ import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import IconButton from '@mui/material/IconButton';
+import ListItemIcon from '@mui/material/ListItemIcon';
+import Menu from '@mui/material/Menu';
+import MenuItem from '@mui/material/MenuItem';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
+import Tab from '@mui/material/Tab';
+import Tabs from '@mui/material/Tabs';
 import TextField from '@mui/material/TextField';
+import ToggleButton from '@mui/material/ToggleButton';
+import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import type { GridColDef } from '@mui/x-data-grid';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { RefObject } from 'react';
 import { Link as RouterLink, useSearchParams } from 'react-router-dom';
 import { useAppContext } from '../AppContext';
 import {
   api,
+  evidenceUrl,
+  type AgentRun,
   type BatchJob,
   type BatchJobPr,
   type BatchJobVerification,
+  type Defect,
   type DiffHunk,
   type DiffHunksResponse,
   type DiffHygieneReport,
+  type HarvestDefect,
   type VerifyResult,
   type BatchRecord,
   type WorktreeDiscard,
@@ -46,10 +63,15 @@ import {
   cellTextClamp2,
 } from '../components/AdminDataGrid';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import {
+  EvidenceGallery,
+  type EvidenceGroup,
+} from '../components/EvidenceGallery';
 import { FilterSelect } from '../components/FilterSelect';
 import { ListPage } from '../components/ListPage';
 import { LoadingState } from '../components/LoadingState';
 import { SearchField } from '../components/SearchField';
+import { defectStatusColor, defectStatusLabel } from '../defectStatus';
 import {
   createStatusColor,
   ghStateColor,
@@ -469,7 +491,19 @@ function VerificationPanel({
   );
 }
 
+/** `job.json` is agent-writable, so only http(s) URLs are turned into links. */
+function httpUrl(raw: string): string | null {
+  try {
+    const url = new URL(raw);
+    if (url.protocol === 'http:' || url.protocol === 'https:') return url.href;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function PrRow({ p }: { p: BatchJobPr }) {
+  const href = p.url ? httpUrl(p.url) : null;
   // Prefer GitHub lifecycle chip; fall back to create-time status only when unknown
   const lifecycle = p.ghState || null;
   const showCreateStatus =
@@ -540,17 +574,27 @@ function PrRow({ p }: { p: BatchJobPr }) {
         </Typography>
       ) : null}
       {p.url ? (
-        <Typography
-          component="a"
-          href={p.url}
-          target="_blank"
-          rel="noreferrer"
-          variant="caption"
-          color="primary"
-          sx={{ wordBreak: 'break-all' }}
-        >
-          {p.url}
-        </Typography>
+        href ? (
+          <Typography
+            component="a"
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            variant="caption"
+            color="primary"
+            sx={{ wordBreak: 'break-all' }}
+          >
+            {p.url}
+          </Typography>
+        ) : (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ wordBreak: 'break-all' }}
+          >
+            {p.url}
+          </Typography>
+        )
       ) : null}
       {p.error ? (
         <Typography variant="caption" color="error">
@@ -625,6 +669,996 @@ function DeletePreviewList({
   );
 }
 
+type DrawerTab = 'overview' | 'evidence' | 'log';
+
+function absoluteLocal(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return iso;
+  return new Date(t).toLocaleString();
+}
+
+/** Compact relative time for the drawer header. `title` carries the absolute time. */
+function relativeTime(iso: string, now: number): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return iso;
+  const sec = Math.round((now - t) / 1000);
+  if (sec < 45) return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) {
+    const n = Math.max(1, min);
+    return n === 1 ? '1 minute ago' : `${n} minutes ago`;
+  }
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return hr === 1 ? '1 hour ago' : `${hr} hours ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return day === 1 ? '1 day ago' : `${day} days ago`;
+  const month = Math.floor(day / 30);
+  if (month < 12) return month === 1 ? '1 month ago' : `${month} months ago`;
+  const year = Math.max(1, Math.floor(day / 365));
+  return year === 1 ? '1 year ago' : `${year} years ago`;
+}
+
+function formatUsd(n: number | undefined): string {
+  const v = typeof n === 'number' && Number.isFinite(n) ? n : 0;
+  return `$${v.toFixed(2)}`;
+}
+
+const HARVEST_OUTCOME_LABEL: Record<string, string> = {
+  resolved: 'Resolved',
+  regression: 'Regression',
+  not_resolved: 'Not resolved',
+  notes_only: 'Notes only',
+  no_evidence: 'No evidence',
+  error: 'Error',
+};
+
+function harvestOutcomeLabel(outcome: string): string {
+  return HARVEST_OUTCOME_LABEL[outcome] ?? outcome;
+}
+
+function harvestOutcomeColor(
+  outcome: string,
+): 'default' | 'success' | 'warning' | 'error' {
+  if (outcome === 'resolved') return 'success';
+  if (
+    outcome === 'regression' ||
+    outcome === 'not_resolved' ||
+    outcome === 'notes_only'
+  ) {
+    return 'warning';
+  }
+  if (outcome === 'error') return 'error';
+  return 'default';
+}
+
+function imageCountLabel(n: number): string {
+  return `${n} ${n === 1 ? 'image' : 'images'}`;
+}
+
+/** Outcome for a defect on the newest harvest run, if that run recorded one. */
+function latestHarvestFor(
+  job: BatchJob,
+  defectId: string,
+): HarvestDefect | undefined {
+  const runs = job.harvests;
+  if (!runs?.length) return undefined;
+  return runs[runs.length - 1]?.defects.find((d) => d.defectId === defectId);
+}
+
+function evidenceItems(
+  rels: string[] | undefined,
+): { url: string; alt: string }[] {
+  const items: { url: string; alt: string }[] = [];
+  for (const rel of rels ?? []) {
+    const url = evidenceUrl(rel);
+    if (url) items.push({ url, alt: rel });
+  }
+  return items;
+}
+
+function stoppedByLabel(stoppedBy: string | undefined): string {
+  if (!stoppedBy) return '—';
+  if (stoppedBy === 'artifacts') return 'artifacts delivered';
+  return stoppedBy;
+}
+
+function tabForStatus(status: string | undefined): DrawerTab {
+  return status === 'running' || status === 'queued' ? 'log' : 'overview';
+}
+
+function restartReason(
+  label: string,
+  check: BatchJob['resumable'],
+): string | null {
+  if (!check || check.ok || !check.reason) return null;
+  return `${label}: ${check.reason}`;
+}
+
+function LinkedDefectChip({
+  id,
+  onNavigate,
+}: {
+  id: string;
+  onNavigate: () => void;
+}) {
+  return (
+    <Chip
+      size="small"
+      color="primary"
+      variant="outlined"
+      label={id}
+      component={RouterLink}
+      to={`/?id=${encodeURIComponent(id)}`}
+      clickable
+      onClick={onNavigate}
+      sx={{
+        fontFamily: 'ui-monospace, Menlo, monospace',
+        fontSize: 11,
+        maxWidth: '100%',
+      }}
+    />
+  );
+}
+
+function RunSummary({ run }: { run: AgentRun }) {
+  const missing = (run.missing ?? []).map((m) => m.trim()).filter(Boolean);
+  return (
+    <Box>
+      <Typography variant="subtitle2" gutterBottom>
+        Run summary
+      </Typography>
+      <Typography variant="body2">Attempts: {run.iterations}</Typography>
+      <Typography variant="body2">
+        Stopped by: {stoppedByLabel(run.stoppedBy)}
+      </Typography>
+      {missing.length ? (
+        <Typography variant="body2">Missing: {missing.join(', ')}</Typography>
+      ) : null}
+      <Typography variant="body2">
+        Turns: {run.turns == null ? '—' : run.turns}
+      </Typography>
+      <Typography variant="body2">Cost: {formatUsd(run.totalCostUsd)}</Typography>
+      {run.resumes != null && run.resumes > 0 ? (
+        <Typography variant="body2">Resumes: {run.resumes}</Typography>
+      ) : null}
+      <Typography variant="caption" color="text.secondary" component="div">
+        Session{' '}
+        <Box
+          component="span"
+          sx={{ fontFamily: 'ui-monospace, Menlo, monospace' }}
+        >
+          {run.sessionId || '—'}
+        </Box>
+      </Typography>
+    </Box>
+  );
+}
+
+function DefectOutcomeList({
+  job,
+  onNavigate,
+}: {
+  job: BatchJob;
+  onNavigate: () => void;
+}) {
+  const ids = job.defect_ids || [];
+  if (!ids.length) return null;
+  const hasHarvests = (job.harvests?.length ?? 0) > 0;
+  return (
+    <Box>
+      <Typography variant="subtitle2" gutterBottom>
+        Defects
+      </Typography>
+      <Stack spacing={1}>
+        {ids.map((id) => {
+          const entry = hasHarvests ? latestHarvestFor(job, id) : undefined;
+          return (
+            <Box key={id}>
+              <Stack
+                direction="row"
+                spacing={1}
+                alignItems="center"
+                flexWrap="wrap"
+                useFlexGap
+              >
+                <LinkedDefectChip id={id} onNavigate={onNavigate} />
+                {entry ? (
+                  <Chip
+                    size="small"
+                    label={harvestOutcomeLabel(entry.outcome)}
+                    color={harvestOutcomeColor(entry.outcome)}
+                  />
+                ) : null}
+                {entry ? (
+                  <Typography variant="caption" color="text.secondary">
+                    {imageCountLabel(entry.images?.length ?? 0)}
+                  </Typography>
+                ) : null}
+              </Stack>
+              {entry?.reason ? (
+                <Typography variant="caption" color="text.secondary">
+                  {entry.reason}
+                </Typography>
+              ) : null}
+            </Box>
+          );
+        })}
+      </Stack>
+    </Box>
+  );
+}
+
+function WorktreeSection({ job }: { job: BatchJob }) {
+  const trees = job.worktrees || [];
+  if (!trees.length) return null;
+  return (
+    <Accordion
+      key={job.jobId}
+      disableGutters
+      elevation={0}
+      defaultExpanded={false}
+      sx={{
+        border: 1,
+        borderColor: 'divider',
+        bgcolor: 'transparent',
+        '&:before': { display: 'none' },
+      }}
+    >
+      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+        <Typography variant="subtitle2">Worktrees</Typography>
+      </AccordionSummary>
+      <AccordionDetails>
+        <Stack spacing={1}>
+          {trees.map((w) => (
+            <Box key={`${w.repo}-${w.branch}`}>
+              <Typography variant="body2">{w.repo}</Typography>
+              {(
+                [
+                  ['Base branch', w.baseBranch || 'not recorded'],
+                  ['Job branch', w.branch],
+                  ['Worktree', w.worktreeAbs],
+                ] as const
+              ).map(([label, value]) => (
+                <Typography
+                  key={label}
+                  variant="caption"
+                  component="div"
+                  color="text.secondary"
+                  sx={{
+                    fontFamily: 'ui-monospace, Menlo, monospace',
+                    wordBreak: 'break-all',
+                  }}
+                >
+                  {label}: {value}
+                </Typography>
+              ))}
+            </Box>
+          ))}
+        </Stack>
+      </AccordionDetails>
+    </Accordion>
+  );
+}
+
+function JobPrSection({ job }: { job: BatchJob }) {
+  const prs = job.prs || [];
+  if (!prs.length) return null;
+  const summary = summarizePrs(prs);
+  const allMerged =
+    prs.every((p) => !isTrackablePr(p) || p.ghState === 'merged') &&
+    prs.some((p) => p.ghState === 'merged');
+  const mode = integrateMode(job);
+  const title =
+    mode === 'merge'
+      ? 'Merges'
+      : mode === 'mixed'
+        ? 'Pull requests and merges'
+        : 'Pull requests';
+  return (
+    <Stack spacing={0.5}>
+      <Stack
+        direction="row"
+        alignItems="center"
+        spacing={1}
+        flexWrap="wrap"
+        useFlexGap
+      >
+        <Typography variant="subtitle2">{title}</Typography>
+        {summary ? (
+          <Chip
+            size="small"
+            label={summary}
+            color={allMerged ? 'success' : 'default'}
+          />
+        ) : null}
+      </Stack>
+      {prs.map((p) => (
+        <PrRow key={`${p.repo}-${p.branch}`} p={p} />
+      ))}
+    </Stack>
+  );
+}
+
+function JobOverview({
+  job,
+  jobActionMsg,
+  onNavigateDefect,
+}: {
+  job: BatchJob;
+  jobActionMsg: string;
+  onNavigateDefect: () => void;
+}) {
+  return (
+    <Stack spacing={1.5}>
+      {job.error ? (
+        <Alert severity="warning" sx={{ py: 0 }}>
+          {job.error}
+        </Alert>
+      ) : null}
+      {job.simQueue ? (
+        <Alert severity="info" sx={{ py: 0 }}>
+          {`Waiting for the simulator: #${job.simQueue.position} in line, behind `}
+          <Box
+            component="span"
+            sx={{ fontFamily: 'ui-monospace, Menlo, monospace' }}
+          >
+            {job.simQueue.holder}
+          </Box>
+          {'. It starts on its own; Stop removes it from the line.'}
+        </Alert>
+      ) : null}
+      {jobActionMsg ? (
+        <Alert
+          severity={
+            /fail|error|cannot|invalid/i.test(jobActionMsg) &&
+            !/0 failed|no failure/i.test(jobActionMsg)
+              ? 'error'
+              : 'info'
+          }
+          sx={{ py: 0 }}
+        >
+          {jobActionMsg}
+        </Alert>
+      ) : null}
+      {job.agentRun ? <RunSummary run={job.agentRun} /> : null}
+      <DefectOutcomeList job={job} onNavigate={onNavigateDefect} />
+      {job.verification?.ran ? (
+        <VerificationPanel v={job.verification} baseline={job.baseline} />
+      ) : null}
+      {job.diffHygiene ? (
+        <DiffHygienePanel
+          key={job.jobId}
+          d={job.diffHygiene}
+          jobId={job.jobId}
+        />
+      ) : null}
+      <JobPrSection job={job} />
+      <WorktreeSection job={job} />
+    </Stack>
+  );
+}
+
+const NO_HARVEST_RECORD =
+  "No harvest record for this job (jobs run before 2026-09-24 don't have one). The defect's fix screenshots are on Defects.";
+
+type LoadedDefect =
+  | { kind: 'loading' }
+  | { kind: 'error'; message: string }
+  | { kind: 'ready'; defect: Defect };
+
+/** Accept the `{ defect }` envelope Defects uses, or a bare Defect body. */
+function defectFromPayload(body: Defect & { defect?: Defect }): Defect | null {
+  if (body.defect?.id) return body.defect;
+  if (body.id) return body;
+  return null;
+}
+
+function harvestGalleryGroups(
+  job: BatchJob,
+  defectId: string,
+  defect: Defect,
+): EvidenceGroup[] {
+  const groups: EvidenceGroup[] = [
+    {
+      title: 'Report',
+      emptyLabel: 'None',
+      items: evidenceItems(defect.evidence),
+    },
+  ];
+  (job.harvests ?? []).forEach((run, i) => {
+    const entry = run.defects.find((d) => d.defectId === defectId);
+    if (!entry?.images?.length) return;
+    groups.push({
+      title: `Run ${i + 1} · ${absoluteLocal(run.at)} · ${harvestOutcomeLabel(entry.outcome)}`,
+      emptyLabel: 'None',
+      items: evidenceItems(entry.images),
+      accent: entry.outcome === 'resolved' ? 'success' : undefined,
+    });
+  });
+  return groups;
+}
+
+/** Stable per defect, so one gallery's mount-time `false` cannot clear another's. */
+function BoundEvidenceGallery({
+  defectId,
+  groups,
+  onViewerChange,
+}: {
+  defectId: string;
+  groups: EvidenceGroup[];
+  onViewerChange: (defectId: string, open: boolean) => void;
+}) {
+  const onViewerChangeRef = useRef(onViewerChange);
+  onViewerChangeRef.current = onViewerChange;
+  const report = useCallback(
+    (open: boolean) => {
+      onViewerChangeRef.current(defectId, open);
+    },
+    [defectId],
+  );
+  return <EvidenceGallery groups={groups} onViewerChange={report} />;
+}
+
+function HarvestEvidence({
+  job,
+  onViewerChange,
+}: {
+  job: BatchJob;
+  onViewerChange: (defectId: string, open: boolean) => void;
+}) {
+  const ids = job.defect_ids || [];
+  const defectKey = ids.join('\0');
+  const harvestCount = job.harvests?.length ?? 0;
+  const [loaded, setLoaded] = useState<Record<string, LoadedDefect>>({});
+
+  useEffect(() => {
+    const idList = defectKey ? defectKey.split('\0') : [];
+    if (!idList.length) {
+      setLoaded({});
+      return;
+    }
+    let cancelled = false;
+    setLoaded((prev) => {
+      const next: Record<string, LoadedDefect> = {};
+      for (const id of idList) {
+        const cur = prev[id];
+        next[id] = cur?.kind === 'ready' ? cur : { kind: 'loading' };
+      }
+      return next;
+    });
+    void Promise.all(
+      idList.map(async (id) => {
+        try {
+          const body = await api<Defect & { defect?: Defect }>(
+            `/api/defects/${encodeURIComponent(id)}`,
+          );
+          const defect = defectFromPayload(body);
+          if (!defect) {
+            return [
+              id,
+              { kind: 'error' as const, message: 'Defect not found' },
+            ] as const;
+          }
+          return [id, { kind: 'ready' as const, defect }] as const;
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          return [id, { kind: 'error' as const, message }] as const;
+        }
+      }),
+    ).then((rows) => {
+      if (cancelled) return;
+      const next: Record<string, LoadedDefect> = {};
+      for (const [id, row] of rows) next[id] = row;
+      setLoaded(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [defectKey, harvestCount]);
+
+  if (!ids.length) {
+    return (
+      <Typography variant="body2" color="text.secondary">
+        No linked defects.
+      </Typography>
+    );
+  }
+
+  return (
+    <Stack spacing={2}>
+      {ids.map((id) => {
+        const row = loaded[id];
+        if (!row || row.kind === 'loading') {
+          return (
+            <Typography key={id} variant="caption" color="text.secondary">
+              Loading {id}…
+            </Typography>
+          );
+        }
+        if (row.kind === 'error') {
+          return (
+            <Typography key={id} variant="caption" color="error">
+              {id}: {row.message}
+            </Typography>
+          );
+        }
+        const defect = row.defect;
+        return (
+          <Box key={id}>
+            <Stack
+              direction="row"
+              spacing={1}
+              alignItems="center"
+              flexWrap="wrap"
+              useFlexGap
+              sx={{ mb: 1 }}
+            >
+              <Typography variant="subtitle2">{defect.title || id}</Typography>
+              <Chip
+                size="small"
+                label={defectStatusLabel(defect.status)}
+                color={defectStatusColor(defect.status)}
+              />
+            </Stack>
+            <BoundEvidenceGallery
+              defectId={id}
+              groups={harvestGalleryGroups(job, id, defect)}
+              onViewerChange={onViewerChange}
+            />
+          </Box>
+        );
+      })}
+    </Stack>
+  );
+}
+
+function JobEvidence({
+  job,
+  onViewerChange,
+  onNavigateDefect,
+}: {
+  job: BatchJob;
+  onViewerChange: (defectId: string, open: boolean) => void;
+  onNavigateDefect: () => void;
+}) {
+  if (job.harvests == null) {
+    const ids = job.defect_ids || [];
+    return (
+      <Stack spacing={1}>
+        <Alert severity="info">{NO_HARVEST_RECORD}</Alert>
+        {ids.length ? (
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            {ids.map((id) => (
+              <LinkedDefectChip key={id} id={id} onNavigate={onNavigateDefect} />
+            ))}
+          </Stack>
+        ) : null}
+      </Stack>
+    );
+  }
+  return (
+    <HarvestEvidence
+      key={job.jobId}
+      job={job}
+      onViewerChange={onViewerChange}
+    />
+  );
+}
+
+function parsedLog(line: string): {
+  level: string;
+  source: string;
+  sourceLabel: string;
+  kind: 'agent' | 'dd' | 'other';
+  body: string;
+} {
+  const m = line.match(/^\[(\w+)\]\s*(?:\[([^\]]+)\]\s*)?([\s\S]*)$/);
+  const level = m?.[1] ?? 'info';
+  const source = m?.[2] ?? '';
+  const body = m?.[3] ?? line;
+  const sourceLabel = source === 'Grok' ? 'Agent' : source;
+  const kind =
+    source === 'Grok' || source === 'Agent'
+      ? 'agent'
+      : source === 'DefectDrainer' || source === 'DD'
+        ? 'dd'
+        : 'other';
+  return { level, source, sourceLabel, kind, body };
+}
+
+function isProblemLevel(level: string): boolean {
+  return level === 'warn' || level === 'warning' || level === 'error';
+}
+
+function LogLine({ line, index }: { line: string; index: number }) {
+  const { level, source, sourceLabel, body } = parsedLog(line);
+  const sourceColor =
+    source === 'Grok' || sourceLabel === 'Agent'
+      ? 'secondary.main'
+      : source === 'DefectDrainer'
+        ? 'primary.main'
+        : 'text.secondary';
+  return (
+    <Box key={`${index}-${line.slice(0, 32)}`} sx={{ mb: 0.5 }}>
+      <Typography
+        component="span"
+        variant="caption"
+        color="text.secondary"
+        sx={{ fontFamily: 'inherit' }}
+      >
+        [{level}]
+      </Typography>
+      {sourceLabel ? (
+        <Typography
+          component="span"
+          variant="caption"
+          fontWeight={700}
+          sx={{ fontFamily: 'inherit', color: sourceColor, ml: 0.5 }}
+        >
+          [{sourceLabel}]
+        </Typography>
+      ) : null}
+      <Typography
+        component="span"
+        variant="caption"
+        sx={{
+          fontFamily: 'inherit',
+          whiteSpace: 'pre-wrap',
+          ml: 0.5,
+          color:
+            level === 'error'
+              ? 'error.main'
+              : level === 'warn' || level === 'warning'
+                ? 'warning.main'
+                : 'text.primary',
+        }}
+      >
+        {body}
+      </Typography>
+    </Box>
+  );
+}
+
+const filterGroupSx = {
+  '& .MuiToggleButton-root': {
+    textTransform: 'none',
+    py: 0.25,
+    px: 1,
+    lineHeight: 1.4,
+  },
+} as const;
+
+function JobLogPanel({
+  jobId,
+  lines,
+  shown,
+  logBoxRef,
+  logEndRef,
+}: {
+  jobId: string;
+  lines: string[];
+  shown: boolean;
+  logBoxRef: RefObject<HTMLDivElement | null>;
+  logEndRef: RefObject<HTMLDivElement | null>;
+}) {
+  const [level, setLevel] = useState<'all' | 'problems'>('all');
+  const [source, setSource] = useState<'all' | 'agent' | 'dd'>('all');
+  const [filterJob, setFilterJob] = useState(jobId);
+  const followRef = useRef(true);
+  const pinningRef = useRef(false);
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  if (filterJob !== jobId) {
+    setFilterJob(jobId);
+    setLevel('all');
+    setSource('all');
+    followRef.current = true;
+  }
+
+  const onLogScroll = useCallback(() => {
+    // Ignore the pin itself, and ignore scrolls while the tab is hidden —
+    // a zero-height box would look like the operator had scrolled up.
+    if (pinningRef.current || !shownRef.current) return;
+    const el = logBoxRef.current;
+    if (!el) return;
+    followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }, [logBoxRef]);
+
+  const logTail = lines.length ? lines[lines.length - 1] : '';
+  useEffect(() => {
+    const el = logBoxRef.current;
+    if (!el || !followRef.current) return;
+    // Assign scrollTop (not scrollIntoView) so a hidden Log tab cannot scroll
+    // Overview. `shown` is a dependency so revealing the tab re-pins.
+    // Hold `pinningRef` through the next frame so the scroll event this
+    // assignment fires is not treated as the operator scrolling away.
+    pinningRef.current = true;
+    el.scrollTop = el.scrollHeight;
+    const frame = window.requestAnimationFrame(() => {
+      pinningRef.current = false;
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      pinningRef.current = false;
+    };
+  }, [shown, lines.length, logTail, level, source, jobId, logBoxRef]);
+
+  const visible = lines
+    .map((line, index) => ({ line, index, parsed: parsedLog(line) }))
+    .filter(({ parsed }) => {
+      if (level === 'problems' && !isProblemLevel(parsed.level)) return false;
+      if (source === 'agent' && parsed.kind !== 'agent') return false;
+      if (source === 'dd' && parsed.kind !== 'dd') return false;
+      return true;
+    });
+
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+      }}
+    >
+      <Stack
+        direction="row"
+        spacing={1}
+        useFlexGap
+        flexWrap="wrap"
+        alignItems="center"
+        sx={{ mb: 1, flexShrink: 0 }}
+      >
+        <Typography variant="caption" color="text.secondary">
+          Level
+        </Typography>
+        <ToggleButtonGroup
+          size="small"
+          exclusive
+          value={level}
+          aria-label="Log level"
+          sx={filterGroupSx}
+          onChange={(_event, value) => {
+            if (value === 'all' || value === 'problems') setLevel(value);
+          }}
+        >
+          <ToggleButton value="all">All</ToggleButton>
+          <ToggleButton value="problems">Warnings + errors</ToggleButton>
+        </ToggleButtonGroup>
+        <Typography variant="caption" color="text.secondary">
+          Source
+        </Typography>
+        <ToggleButtonGroup
+          size="small"
+          exclusive
+          value={source}
+          aria-label="Log source"
+          sx={filterGroupSx}
+          onChange={(_event, value) => {
+            if (value === 'all' || value === 'agent' || value === 'dd') {
+              setSource(value);
+            }
+          }}
+        >
+          <ToggleButton value="all">All</ToggleButton>
+          <ToggleButton value="agent">Agent</ToggleButton>
+          <ToggleButton value="dd">DD</ToggleButton>
+        </ToggleButtonGroup>
+      </Stack>
+      <Box
+        ref={logBoxRef}
+        onScroll={onLogScroll}
+        sx={{
+          m: 0,
+          p: 1.5,
+          flex: 1,
+          minHeight: 0,
+          overflow: 'auto',
+          bgcolor: 'background.default',
+          borderRadius: 1,
+          border: 1,
+          borderColor: 'divider',
+          fontSize: 12,
+          fontFamily: 'ui-monospace, Menlo, monospace',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        }}
+      >
+        {lines.length === 0 ? (
+          <Typography variant="caption" color="text.secondary">
+            (no log lines yet — waiting for agent…)
+          </Typography>
+        ) : visible.length === 0 ? (
+          <Typography variant="caption" color="text.secondary">
+            No lines match these filters.
+          </Typography>
+        ) : (
+          visible.map(({ line, index }) => (
+            <LogLine key={`${index}-${line.slice(0, 32)}`} line={line} index={index} />
+          ))
+        )}
+        <div ref={logEndRef} />
+      </Box>
+    </Box>
+  );
+}
+
+function DrawerActionBar({
+  job,
+  jobId,
+  busy,
+  onStop,
+  onResume,
+  onRerun,
+  onIntegrate,
+  onRefreshLog,
+  onRefreshPrs,
+  onDelete,
+}: {
+  job: BatchJob | null;
+  jobId: string | null;
+  busy: boolean;
+  onStop: () => void;
+  onResume: () => void;
+  onRerun: () => void;
+  onIntegrate: () => void;
+  onRefreshLog: () => void;
+  onRefreshPrs: () => void;
+  onDelete: () => void;
+}) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const [menuJob, setMenuJob] = useState(jobId);
+  if (menuJob !== jobId) {
+    setMenuJob(jobId);
+    setAnchor(null);
+  }
+  const closeMenu = () => setAnchor(null);
+  const showRefreshPrs = !!job && integrateMode(job) !== 'merge';
+  return (
+    <Box
+      sx={{
+        px: 2,
+        py: 1,
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 1,
+        alignItems: 'center',
+        borderBottom: 1,
+        borderColor: 'divider',
+        flexShrink: 0,
+      }}
+    >
+      <Button
+        size="small"
+        color="error"
+        variant="outlined"
+        startIcon={<StopIcon />}
+        disabled={!job || !canStop(job) || busy}
+        onClick={onStop}
+      >
+        Stop
+      </Button>
+      <Tooltip title={restartTooltip('Resume', job?.resumable)}>
+        <span>
+          <Button
+            size="small"
+            variant="contained"
+            startIcon={<PlayArrowIcon />}
+            disabled={!job || !canResume(job) || busy}
+            onClick={onResume}
+          >
+            Resume
+          </Button>
+        </span>
+      </Tooltip>
+      <Tooltip title={restartTooltip('Re-run', job?.rerunnable)}>
+        <span>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<ReplayIcon />}
+            disabled={!job || !canRerun(job) || busy}
+            onClick={onRerun}
+          >
+            Re-run
+          </Button>
+        </span>
+      </Tooltip>
+      <Tooltip
+        title={job && shipAlreadyDone(job) ? 'Already merged' : integrateLabel(job)}
+      >
+        <span>
+          <Button
+            size="small"
+            variant="contained"
+            color="secondary"
+            startIcon={<CallMergeIcon />}
+            disabled={!job || !canCreatePr(job) || shipAlreadyDone(job) || busy}
+            onClick={onIntegrate}
+          >
+            {integrateLabel(job)}
+          </Button>
+        </span>
+      </Tooltip>
+      <Box sx={{ flex: 1 }} />
+      <Tooltip title="More actions">
+        <IconButton
+          size="small"
+          aria-label="More actions"
+          onClick={(e) => setAnchor(e.currentTarget)}
+        >
+          <MoreVertIcon />
+        </IconButton>
+      </Tooltip>
+      <Menu
+        anchorEl={anchor}
+        open={Boolean(anchor)}
+        onClose={closeMenu}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <MenuItem
+          disabled={!jobId || busy}
+          onClick={() => {
+            closeMenu();
+            onRefreshLog();
+          }}
+        >
+          <ListItemIcon>
+            <RefreshIcon fontSize="small" />
+          </ListItemIcon>
+          Refresh log
+        </MenuItem>
+        {showRefreshPrs ? (
+          <MenuItem
+            disabled={!job || !canRefreshPrs(job) || busy}
+            onClick={() => {
+              closeMenu();
+              onRefreshPrs();
+            }}
+          >
+            <ListItemIcon>
+              <RefreshIcon fontSize="small" />
+            </ListItemIcon>
+            Refresh PRs
+          </MenuItem>
+        ) : null}
+        <MenuItem
+          disabled={!jobId || busy}
+          onClick={() => {
+            closeMenu();
+            onDelete();
+          }}
+          sx={{ color: 'error.main' }}
+        >
+          <ListItemIcon sx={{ color: 'inherit' }}>
+            <DeleteOutlineIcon fontSize="small" />
+          </ListItemIcon>
+          Delete
+        </MenuItem>
+      </Menu>
+    </Box>
+  );
+}
+
+function ActionReasons({ job }: { job: BatchJob | null }) {
+  if (!job || job.status === 'running' || job.status === 'queued') return null;
+  const lines = [
+    restartReason('Resume', job.resumable),
+    restartReason('Re-run', job.rerunnable),
+  ].filter((line): line is string => Boolean(line));
+  if (!lines.length) return null;
+  return (
+    <Stack spacing={0.25} sx={{ px: 2, pt: 0.75, pb: 0.5, flexShrink: 0 }}>
+      {lines.map((line) => (
+        <Typography key={line} variant="caption" color="text.secondary">
+          {line}
+        </Typography>
+      ))}
+    </Stack>
+  );
+}
+
 const ACTION_COPY: Record<
   JobAction,
   { title: string; message: (id: string) => string; confirm: string }
@@ -690,12 +1724,28 @@ export function JobsPage() {
   // The job a delete preview was requested for; a slower response for an
   // earlier job must not land in this job's confirm dialog.
   const deletePreviewFor = useRef<string | null>(null);
+  // Same guard for the ship-preview request: A's preview must not fill B's dialog.
+  const shipPreviewFor = useRef<string | null>(null);
   const [jobActionBusy, setJobActionBusy] = useState(false);
   const [jobActionMsg, setJobActionMsg] = useState('');
   const [loading, setLoading] = useState(true);
 
   const logEndRef = useRef<HTMLDivElement | null>(null);
   const logBoxRef = useRef<HTMLDivElement | null>(null);
+  const tabForJob = useRef<string | null>(null);
+  // Set when the operator picks a tab for this open id, so a late auto-choice
+  // (deep link, job not in the list yet) does not overwrite that pick.
+  const tabPickedFor = useRef<string | null>(null);
+  const [drawerTab, setDrawerTab] = useState<DrawerTab>('overview');
+  // One entry per gallery whose viewer is open. A sibling's `false` must not
+  // clear another gallery's `true`.
+  const [openViewers, setOpenViewers] = useState<Set<string>>(() => new Set());
+  const [now, setNow] = useState(() => Date.now());
+  // Id currently shown in the drawer, plus a generation bumped on open/close
+  // so a slow response for the previous open cannot clear the next load.
+  const openJobRef = useRef<string | null>(searchParams.get('job'));
+  const detailEpoch = useRef(0);
+  const busyEpoch = useRef(0);
 
   const refresh = useCallback(async () => {
     if (!appId) return;
@@ -721,17 +1771,31 @@ export function JobsPage() {
     }
   }, [appId]);
 
-  const applyJob = useCallback((job: BatchJob) => {
-    setDetailJob(job);
+  const writeJobRow = useCallback((job: BatchJob) => {
     setBatchJobs((prev) => {
       const others = prev.filter((j) => j.jobId !== job.jobId);
       return [job, ...others].slice(0, 40);
     });
   }, []);
 
+  const detailStillOpen = useCallback((jobId: string, epoch: number) => {
+    return openJobRef.current === jobId && detailEpoch.current === epoch;
+  }, []);
+
+  const beginBusy = useCallback(() => {
+    const token = ++busyEpoch.current;
+    setJobActionBusy(true);
+    return token;
+  }, []);
+
+  const endBusy = useCallback((token: number) => {
+    if (busyEpoch.current === token) setJobActionBusy(false);
+  }, []);
+
   const refreshPrs = useCallback(
     async (jobId: string, opts?: { silent?: boolean }) => {
-      if (!opts?.silent) setJobActionBusy(true);
+      const epoch = detailEpoch.current;
+      const busyToken = opts?.silent ? 0 : beginBusy();
       try {
         const { job, prs } = await api<{
           job: BatchJob;
@@ -739,7 +1803,12 @@ export function JobsPage() {
         }>(`/api/batch-jobs/${encodeURIComponent(jobId)}/refresh-prs`, {
           method: 'POST',
         });
-        applyJob(job);
+        if (job.jobId !== jobId) return null;
+        // The grid always takes the refreshed row. The drawer and its message
+        // do not, once the operator has moved on.
+        writeJobRow(job);
+        if (!detailStillOpen(jobId, epoch)) return null;
+        setDetailJob(job);
         const s = summarizePrs(prs);
         if (!opts?.silent) {
           setJobActionMsg(s ? `PR status: ${s}` : 'PR status refreshed');
@@ -751,46 +1820,70 @@ export function JobsPage() {
         }
         return job;
       } catch (e) {
+        if (!detailStillOpen(jobId, epoch)) return null;
         const msg = e instanceof Error ? e.message : String(e);
         // Always surface failures — silent 404 previously hid "stale backend"
         setJobActionMsg(`Refresh PRs failed: ${msg}`);
         return null;
       } finally {
-        if (!opts?.silent) setJobActionBusy(false);
+        if (!opts?.silent) endBusy(busyToken);
       }
     },
-    [applyJob],
+    [beginBusy, detailStillOpen, endBusy, writeJobRow],
   );
 
   const loadDetail = useCallback(
     async (jobId: string) => {
-      setDetailLoading(true);
+      const epoch = detailEpoch.current;
+      if (detailStillOpen(jobId, epoch)) setDetailLoading(true);
       try {
         const { job } = await api<{ job: BatchJob }>(
           `/api/batch-jobs/${encodeURIComponent(jobId)}`,
         );
-        applyJob(job);
+        if (!detailStillOpen(jobId, epoch) || job.jobId !== jobId) return;
+        writeJobRow(job);
+        setDetailJob(job);
         // Missing ghState or stale (>2 min): poll GitHub
         const needsGh =
           canRefreshPrs(job) &&
           ((job.prs || []).some((p) => isTrackablePr(p) && !p.ghState) ||
             prsStale(job.prs));
-        if (needsGh) {
+        if (needsGh && detailStillOpen(jobId, epoch)) {
           void refreshPrs(jobId, { silent: true });
         }
       } catch (e) {
+        if (!detailStillOpen(jobId, epoch)) return;
         setJobActionMsg(e instanceof Error ? e.message : String(e));
       } finally {
-        setDetailLoading(false);
+        if (detailStillOpen(jobId, epoch)) setDetailLoading(false);
       }
     },
-    [applyJob, refreshPrs],
+    [detailStillOpen, refreshPrs, writeJobRow],
   );
+
+  const clearViewers = useCallback(() => {
+    setOpenViewers((prev) => (prev.size === 0 ? prev : new Set()));
+  }, []);
+
+  const setDefectViewer = useCallback((defectId: string, open: boolean) => {
+    setOpenViewers((prev) => {
+      const has = prev.has(defectId);
+      if (open === has) return prev;
+      const next = new Set(prev);
+      if (open) next.add(defectId);
+      else next.delete(defectId);
+      return next;
+    });
+  }, []);
 
   const openDetail = useCallback(
     (jobId: string) => {
+      openJobRef.current = jobId;
+      detailEpoch.current += 1;
       setDetailJobId(jobId);
       setDetailOpen(true);
+      setDetailLoading(true);
+      clearViewers();
       setJobActionMsg('');
       void loadDetail(jobId);
       setSearchParams(
@@ -802,13 +1895,17 @@ export function JobsPage() {
         { replace: true },
       );
     },
-    [loadDetail, setSearchParams],
+    [clearViewers, loadDetail, setSearchParams],
   );
 
   const closeDetail = useCallback(() => {
+    openJobRef.current = null;
+    detailEpoch.current += 1;
     setDetailOpen(false);
     setDetailJobId(null);
     setDetailJob(null);
+    setDetailLoading(false);
+    clearViewers();
     setJobActionMsg('');
     setSearchParams(
       (prev) => {
@@ -818,7 +1915,7 @@ export function JobsPage() {
       },
       { replace: true },
     );
-  }, [setSearchParams]);
+  }, [clearViewers, setSearchParams]);
 
   const clearShip = useCallback(() => {
     setShipPreview(null);
@@ -828,6 +1925,7 @@ export function JobsPage() {
     setDeletePreview(null);
     setDeletePreviewError('');
     deletePreviewFor.current = null;
+    shipPreviewFor.current = null;
   }, []);
 
   const requestAction = useCallback(
@@ -854,18 +1952,23 @@ export function JobsPage() {
         batchJobs.find((j) => j.jobId === jobId) ||
         (detailJob?.jobId === jobId ? detailJob : null);
       if (integrateMode(job) === 'pr') return;
+      shipPreviewFor.current = jobId;
       setShipLoading(true);
       void api<ShipPreview>(
         `/api/batch-jobs/${encodeURIComponent(jobId)}/ship-preview`,
       )
         .then((preview) => {
+          if (shipPreviewFor.current !== jobId) return;
           setShipPreview(preview);
           setShipMessage(preview.message);
         })
         .catch((e) => {
+          if (shipPreviewFor.current !== jobId) return;
           setShipError(e instanceof Error ? e.message : String(e));
         })
-        .finally(() => setShipLoading(false));
+        .finally(() => {
+          if (shipPreviewFor.current === jobId) setShipLoading(false);
+        });
     },
     [batchJobs, clearShip, detailJob],
   );
@@ -894,22 +1997,46 @@ export function JobsPage() {
   useEffect(() => {
     const fromUrl = searchParams.get('job');
     if (fromUrl && appId) {
+      openJobRef.current = fromUrl;
+      detailEpoch.current += 1;
       setDetailJobId(fromUrl);
       setDetailOpen(true);
+      setDetailLoading(true);
       void loadDetail(fromUrl);
     }
     // only on app change / mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appId]);
 
+  // Once per opened job: Log while it is running or queued, otherwise Overview.
+  // An operator pick for this id wins, including a pick made before the job
+  // was known. Status changes after the choice must not move the tab.
   useEffect(() => {
-    const el = logBoxRef.current;
-    if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    if (nearBottom) {
-      logEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    if (!detailOpen || !detailJobId) {
+      tabForJob.current = null;
+      tabPickedFor.current = null;
+      return;
     }
-  }, [detailJob?.log?.length]);
+    if (tabPickedFor.current === detailJobId) {
+      tabForJob.current = detailJobId;
+      return;
+    }
+    if (tabForJob.current === detailJobId) return;
+    const known =
+      detailJob?.jobId === detailJobId
+        ? detailJob
+        : batchJobs.find((j) => j.jobId === detailJobId);
+    if (!known) return;
+    tabForJob.current = detailJobId;
+    setDrawerTab(tabForStatus(known.status));
+  }, [detailOpen, detailJobId, detailJob, batchJobs]);
+
+  useEffect(() => {
+    if (!detailOpen) return;
+    setNow(Date.now());
+    const t = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, [detailOpen]);
 
   const filteredJobs = useMemo(() => {
     let rows = [...batchJobs];
@@ -947,8 +2074,17 @@ export function JobsPage() {
     const id = actionTargetId;
     const action = pendingAction;
     if (!id || !action) return;
-    setJobActionBusy(true);
+    const busyToken = beginBusy();
     setJobActionMsg('');
+    // List alert when no drawer is open; drawer alert only for the job it shows.
+    const note = (message: string) => {
+      const openId = openJobRef.current;
+      if (openId == null || openId === id) setJobActionMsg(message);
+    };
+    const publish = (job: BatchJob) => {
+      writeJobRow(job);
+      if (openJobRef.current === job.jobId) setDetailJob(job);
+    };
     try {
       if (action === 'delete') {
         const { cleanup } = await api<{ cleanup?: WorktreeDiscard[] }>(
@@ -958,9 +2094,12 @@ export function JobsPage() {
         setPendingAction(null);
         setActionTargetId(null);
         clearShip();
-        if (detailJobId === id) closeDetail();
+        const wasOpen = openJobRef.current === id;
+        if (wasOpen) closeDetail();
         const done = (cleanup ?? []).map(discardSummary).join(' · ');
-        setJobActionMsg(`Deleted ${id}${done ? ` — ${done}` : ''}`);
+        if (wasOpen || openJobRef.current == null) {
+          setJobActionMsg(`Deleted ${id}${done ? ` — ${done}` : ''}`);
+        }
         await refresh();
         return;
       }
@@ -969,24 +2108,30 @@ export function JobsPage() {
           `/api/batch-jobs/${encodeURIComponent(id)}/stop`,
           { method: 'POST' },
         );
-        setDetailJob(job);
-        setJobActionMsg(`Stopped ${job.jobId}`);
+        publish(job);
+        note(`Stopped ${job.jobId}`);
       } else if (action === 'resume') {
         const { job } = await api<{ job: BatchJob }>(
           `/api/batch-jobs/${encodeURIComponent(id)}/resume`,
           { method: 'POST' },
         );
-        setDetailJob(job);
-        openDetail(id);
-        setJobActionMsg(`Resuming ${job.jobId}`);
+        publish(job);
+        if (openJobRef.current == null || openJobRef.current === id) {
+          if (openJobRef.current == null) setDetailJob(job);
+          openDetail(id);
+        }
+        note(`Resuming ${job.jobId}`);
       } else if (action === 'rerun') {
         const { job } = await api<{ job: BatchJob }>(
           `/api/batch-jobs/${encodeURIComponent(id)}/rerun`,
           { method: 'POST' },
         );
-        setDetailJob(job);
-        openDetail(id);
-        setJobActionMsg(`Re-running ${job.jobId}`);
+        publish(job);
+        if (openJobRef.current == null || openJobRef.current === id) {
+          if (openJobRef.current == null) setDetailJob(job);
+          openDetail(id);
+        }
+        note(`Re-running ${job.jobId}`);
       } else if (action === 'create-pr') {
         const { job, prs } = await api<{
           job: BatchJob;
@@ -1000,8 +2145,11 @@ export function JobsPage() {
               : {},
           ),
         });
-        setDetailJob(job);
-        openDetail(id);
+        publish(job);
+        if (openJobRef.current == null || openJobRef.current === id) {
+          if (openJobRef.current == null) setDetailJob(job);
+          openDetail(id);
+        }
         const urls = (prs || [])
           .filter((p) => p.url)
           .map((p) => `${p.repo}: ${p.url}`)
@@ -1012,7 +2160,7 @@ export function JobsPage() {
           .join(' · ');
         const failed = (prs || []).filter((p) => p.status === 'failed').length;
         const failBit = failed ? ` (${failed} failed — see log)` : '';
-        setJobActionMsg(
+        note(
           urls
             ? `PRs: ${urls}${merged ? ` · merged ${merged}` : ''}${failBit}`
             : merged
@@ -1026,14 +2174,14 @@ export function JobsPage() {
       setActionTargetId(null);
       clearShip();
       await refresh();
-      if (detailOpen && detailJobId === id) void loadDetail(id);
+      if (openJobRef.current === id) void loadDetail(id);
     } catch (e) {
-      setJobActionMsg(e instanceof Error ? e.message : String(e));
+      note(e instanceof Error ? e.message : String(e));
       setPendingAction(null);
       setActionTargetId(null);
       clearShip();
     } finally {
-      setJobActionBusy(false);
+      endBusy(busyToken);
     }
   }
 
@@ -1381,6 +2529,13 @@ export function JobsPage() {
         ? ACTION_COPY[pendingAction]
         : null;
 
+  const listedJob =
+    (detailJobId && batchJobs.find((j) => j.jobId === detailJobId)) || null;
+  const readyJob = detailJob?.jobId === detailJobId ? detailJob : null;
+  // List rows omit harvests. Header and actions can use them; tab bodies wait
+  // for the detail payload so a missing harvest record is not a flicker.
+  const drawerJob = readyJob ?? listedJob;
+
   return (
     <ListPage
       title="Jobs"
@@ -1481,12 +2636,15 @@ export function JobsPage() {
         anchor="right"
         open={detailOpen}
         onClose={closeDetail}
+        disableEscapeKeyDown={openViewers.size > 0}
         slotProps={{
           paper: {
             sx: {
-              width: 'min(560px, 100%)',
+              width: 'min(760px, 100%)',
               display: 'flex',
               flexDirection: 'column',
+              height: '100%',
+              overflow: 'hidden',
             },
           },
         }}
@@ -1495,414 +2653,219 @@ export function JobsPage() {
           sx={{
             px: 2,
             py: 1.5,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1,
             borderBottom: 1,
             borderColor: 'divider',
+            flexShrink: 0,
           }}
         >
-          <Typography variant="h6" noWrap sx={{ flex: 1, minWidth: 0 }}>
-            {detailLoading && !detailJob
-              ? 'Loading…'
-              : detailJob?.batchId || detailJobId || 'Job'}
-          </Typography>
-          <IconButton aria-label="Close" onClick={closeDetail}>
-            <CloseIcon />
-          </IconButton>
-        </Box>
-        <Box sx={{ flex: 1, overflow: 'auto', px: 2, py: 2 }}>
-          {detailLoading && !detailJob ? (
-            <LoadingState />
-          ) : detailJob ? (
-            <Stack spacing={1.5}>
-              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                <Chip
-                  size="small"
-                  label={detailJob.status}
-                  color={jobStatusColor(detailJob.status)}
-                />
-                {(() => {
-                  const m = recentBatches.find(
-                    (b) => b.id === detailJob.batchId,
-                  );
-                  return m && m.status !== detailJob.status ? (
-                    <Chip
-                      size="small"
-                      variant="outlined"
-                      label={`batch: ${m.status}`}
-                      color={manifestStatusColor(m.status)}
-                    />
-                  ) : null;
-                })()}
-                <Typography
-                  variant="caption"
-                  sx={{
-                    fontFamily: 'ui-monospace, Menlo, monospace',
-                    alignSelf: 'center',
-                  }}
-                >
-                  {detailJob.jobId}
-                </Typography>
-              </Stack>
-              {detailJob.error ? (
-                <Alert severity="warning" sx={{ py: 0 }}>
-                  {detailJob.error}
-                </Alert>
-              ) : null}
-              {detailJob.simQueue ? (
-                <Alert severity="info" sx={{ py: 0 }}>
-                  {`Waiting for the simulator: #${detailJob.simQueue.position} in line, behind `}
-                  <Box
-                    component="span"
-                    sx={{ fontFamily: 'ui-monospace, Menlo, monospace' }}
-                  >
-                    {detailJob.simQueue.holder}
-                  </Box>
-                  {'. It starts on its own; Stop removes it from the line.'}
-                </Alert>
-              ) : null}
-              {jobActionMsg ? (
-                <Alert
-                  severity={
-                    /fail|error|cannot|invalid/i.test(jobActionMsg) &&
-                    !/0 failed|no failure/i.test(jobActionMsg)
-                      ? 'error'
-                      : 'info'
-                  }
-                  sx={{ py: 0 }}
-                >
-                  {jobActionMsg}
-                </Alert>
-              ) : null}
-              {(detailJob.defect_ids || []).length ? (
-                <Box>
-                  <Typography variant="subtitle2" gutterBottom>
-                    Linked defects
-                  </Typography>
-                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                    {(detailJob.defect_ids || []).map((id) => (
-                      <Chip
-                        key={id}
-                        size="small"
-                        color="primary"
-                        variant="outlined"
-                        label={id}
-                        component={RouterLink}
-                        to={`/?id=${encodeURIComponent(id)}`}
-                        clickable
-                        onClick={closeDetail}
-                        sx={{
-                          fontFamily: 'ui-monospace, Menlo, monospace',
-                          fontSize: 11,
-                          maxWidth: '100%',
-                        }}
-                      />
-                    ))}
-                  </Stack>
-                </Box>
-              ) : null}
-              {(detailJob.worktrees || []).length ? (
-                <Box>
-                  <Typography variant="subtitle2" gutterBottom>
-                    Worktrees
-                  </Typography>
-                  <Stack spacing={1}>
-                    {(detailJob.worktrees || []).map((w) => (
-                      <Box key={`${w.repo}-${w.branch}`}>
-                        <Typography variant="body2">{w.repo}</Typography>
-                        {(
-                          [
-                            ['Base branch', w.baseBranch || 'not recorded'],
-                            ['Job branch', w.branch],
-                            ['Worktree', w.worktreeAbs],
-                          ] as const
-                        ).map(([label, value]) => (
-                          <Typography
-                            key={label}
-                            variant="caption"
-                            component="div"
-                            color="text.secondary"
-                            sx={{
-                              fontFamily: 'ui-monospace, Menlo, monospace',
-                              wordBreak: 'break-all',
-                            }}
-                          >
-                            {label}: {value}
-                          </Typography>
-                        ))}
-                      </Box>
-                    ))}
-                  </Stack>
-                </Box>
-              ) : null}
-              {(detailJob.prs || []).length ? (
-                <Stack spacing={0.5}>
-                  <Stack
-                    direction="row"
-                    alignItems="center"
-                    spacing={1}
-                    flexWrap="wrap"
-                    useFlexGap
-                  >
-                    <Typography variant="subtitle2">
-                      {integrateMode(detailJob) === 'merge'
-                        ? 'Merges'
-                        : integrateMode(detailJob) === 'mixed'
-                          ? 'Pull requests and merges'
-                          : 'Pull requests'}
-                    </Typography>
-                    {summarizePrs(detailJob.prs) ? (
-                      <Chip
-                        size="small"
-                        label={summarizePrs(detailJob.prs)}
-                        color={
-                          (detailJob.prs || []).every(
-                            (p) =>
-                              !isTrackablePr(p) || p.ghState === 'merged',
-                          ) &&
-                          (detailJob.prs || []).some((p) => p.ghState === 'merged')
-                            ? 'success'
-                            : 'default'
-                        }
-                      />
-                    ) : null}
-                    {integrateMode(detailJob) !== 'merge' ? (
-                      <Button
-                        size="small"
-                        startIcon={<RefreshIcon />}
-                        disabled={!canRefreshPrs(detailJob) || jobActionBusy}
-                        onClick={() =>
-                          detailJobId && void refreshPrs(detailJobId)
-                        }
-                      >
-                        Refresh PRs
-                      </Button>
-                    ) : null}
-                  </Stack>
-                  {(detailJob.prs || []).map((p) => (
-                    <PrRow key={`${p.repo}-${p.branch}`} p={p} />
-                  ))}
-                </Stack>
-              ) : null}
-              {detailJob.verification?.ran ? (
-                <VerificationPanel
-                  v={detailJob.verification}
-                  baseline={detailJob.baseline}
-                />
-              ) : null}
-              {detailJob.diffHygiene ? (
-                <DiffHygienePanel
-                  d={detailJob.diffHygiene}
-                  jobId={detailJob.jobId}
-                />
-              ) : null}
-              <Box
-                ref={logBoxRef}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Typography
+              variant="h6"
+              noWrap
+              title={drawerJob?.batchId || undefined}
+              sx={{ flex: 1, minWidth: 0 }}
+            >
+              {drawerJob?.batchId ||
+                (detailLoading ? 'Loading…' : detailJobId || 'Job')}
+            </Typography>
+            <IconButton aria-label="Close" onClick={closeDetail}>
+              <CloseIcon />
+            </IconButton>
+          </Box>
+          {drawerJob ? (
+            <Stack
+              direction="row"
+              spacing={1}
+              flexWrap="wrap"
+              useFlexGap
+              alignItems="center"
+              sx={{ mt: 0.75 }}
+            >
+              <Chip
+                size="small"
+                label={drawerJob.status}
+                color={jobStatusColor(drawerJob.status)}
+              />
+              {(() => {
+                const m = recentBatches.find((b) => b.id === drawerJob.batchId);
+                return m && m.status !== drawerJob.status ? (
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={`batch: ${m.status}`}
+                    color={manifestStatusColor(m.status)}
+                  />
+                ) : null;
+              })()}
+              <Typography
+                variant="caption"
                 sx={{
-                  m: 0,
-                  p: 1.5,
-                  maxHeight: 360,
-                  overflow: 'auto',
-                  bgcolor: 'background.default',
-                  borderRadius: 1,
-                  border: 1,
-                  borderColor: 'divider',
-                  fontSize: 12,
                   fontFamily: 'ui-monospace, Menlo, monospace',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
+                  alignSelf: 'center',
                 }}
               >
-                {(detailJob.log || []).length ? (
-                  (detailJob.log || []).map((line, i) => {
-                    // [level] [Source] message  or legacy [level] message
-                    const m = line.match(
-                      /^\[(\w+)\]\s*(?:\[([^\]]+)\]\s*)?([\s\S]*)$/,
-                    );
-                    const level = m?.[1] ?? 'info';
-                    const source = m?.[2] ?? '';
-                    const body = m?.[3] ?? line;
-                    // Wire may still tag source=Grok; show generic "Agent" in UI
-                    const sourceLabel =
-                      source === 'Grok' ? 'Agent' : source;
-                    const sourceColor =
-                      source === 'Grok' || sourceLabel === 'Agent'
-                        ? 'secondary.main'
-                        : source === 'DefectDrainer'
-                          ? 'primary.main'
-                          : 'text.secondary';
-                    return (
-                      <Box key={`${i}-${line.slice(0, 32)}`} sx={{ mb: 0.5 }}>
-                        <Typography
-                          component="span"
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ fontFamily: 'inherit' }}
-                        >
-                          [{level}]
-                        </Typography>
-                        {sourceLabel ? (
-                          <Typography
-                            component="span"
-                            variant="caption"
-                            fontWeight={700}
-                            sx={{
-                              fontFamily: 'inherit',
-                              color: sourceColor,
-                              ml: 0.5,
-                            }}
-                          >
-                            [{sourceLabel}]
-                          </Typography>
-                        ) : null}
-                        <Typography
-                          component="span"
-                          variant="caption"
-                          sx={{
-                            fontFamily: 'inherit',
-                            whiteSpace: 'pre-wrap',
-                            ml: 0.5,
-                            color:
-                              level === 'error'
-                                ? 'error.main'
-                                : level === 'warn'
-                                  ? 'warning.main'
-                                  : 'text.primary',
-                          }}
-                        >
-                          {body}
-                        </Typography>
-                      </Box>
-                    );
-                  })
-                ) : (
-                  <Typography variant="caption" color="text.secondary">
-                    (no log lines yet — waiting for agent…)
-                  </Typography>
-                )}
-                <div ref={logEndRef} />
-              </Box>
+                {drawerJob.jobId}
+              </Typography>
+              {drawerJob.createdAt ? (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  title={absoluteLocal(drawerJob.createdAt)}
+                  sx={{ alignSelf: 'center' }}
+                >
+                  created {relativeTime(drawerJob.createdAt, now)}
+                </Typography>
+              ) : null}
             </Stack>
-          ) : (
-            <Typography color="text.secondary">Job not found.</Typography>
-          )}
+          ) : null}
         </Box>
-        <Box
+        <DrawerActionBar
+          job={drawerJob}
+          jobId={detailJobId}
+          busy={jobActionBusy}
+          onStop={() => detailJobId && requestAction('stop', detailJobId)}
+          onResume={() => detailJobId && requestAction('resume', detailJobId)}
+          onRerun={() => detailJobId && requestAction('rerun', detailJobId)}
+          onIntegrate={() =>
+            detailJobId && requestAction('create-pr', detailJobId)
+          }
+          onRefreshLog={() => detailJobId && void loadDetail(detailJobId)}
+          onRefreshPrs={() => detailJobId && void refreshPrs(detailJobId)}
+          onDelete={() => detailJobId && requestAction('delete', detailJobId)}
+        />
+        <ActionReasons job={drawerJob} />
+        <Tabs
+          value={drawerTab}
+          onChange={(_event, value) => {
+            if (value === 'overview' || value === 'evidence' || value === 'log') {
+              if (detailJobId) tabPickedFor.current = detailJobId;
+              setDrawerTab(value);
+            }
+          }}
+          aria-label="Job detail"
           sx={{
             px: 2,
-            py: 1.5,
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 1,
-            alignItems: 'center',
-            borderTop: 1,
+            borderBottom: 1,
             borderColor: 'divider',
+            minHeight: 40,
+            flexShrink: 0,
           }}
         >
-          <Button
-            size="small"
-            startIcon={<RefreshIcon />}
-            disabled={!detailJobId || jobActionBusy}
-            onClick={() => detailJobId && void loadDetail(detailJobId)}
+          <Tab
+            label="Overview"
+            value="overview"
+            id="job-tab-overview"
+            aria-controls="job-panel-overview"
+            sx={{ minHeight: 40 }}
+          />
+          <Tab
+            label="Evidence"
+            value="evidence"
+            id="job-tab-evidence"
+            aria-controls="job-panel-evidence"
+            sx={{ minHeight: 40 }}
+          />
+          <Tab
+            label="Log"
+            value="log"
+            id="job-tab-log"
+            aria-controls="job-panel-log"
+            sx={{ minHeight: 40 }}
+          />
+        </Tabs>
+        {!readyJob ? (
+          <Box
+            role="tabpanel"
+            id={`job-panel-${drawerTab}`}
+            aria-labelledby={`job-tab-${drawerTab}`}
+            sx={{ flex: 1, overflow: 'auto', px: 2, py: 2 }}
           >
-            Refresh log
-          </Button>
-          {detailJob && integrateMode(detailJob) !== 'merge' ? (
-            <Button
-              size="small"
-              startIcon={<RefreshIcon />}
-              disabled={!canRefreshPrs(detailJob) || jobActionBusy}
-              onClick={() => detailJobId && void refreshPrs(detailJobId)}
+            {detailLoading ? (
+              <LoadingState />
+            ) : (
+              <Stack spacing={1}>
+                {jobActionMsg ? (
+                  <Alert
+                    severity={
+                      /fail|error|cannot|invalid/i.test(jobActionMsg) &&
+                      !/0 failed|no failure/i.test(jobActionMsg)
+                        ? 'error'
+                        : 'info'
+                    }
+                  >
+                    {jobActionMsg}
+                  </Alert>
+                ) : null}
+                <Typography color="text.secondary">Job not found.</Typography>
+              </Stack>
+            )}
+          </Box>
+        ) : (
+          <Box
+            sx={{
+              flex: 1,
+              minHeight: 0,
+              position: 'relative',
+              overflow: 'hidden',
+            }}
+          >
+            <Box
+              role="tabpanel"
+              id="job-panel-overview"
+              aria-labelledby="job-tab-overview"
+              hidden={drawerTab !== 'overview'}
+              sx={{ height: '100%', overflow: 'auto', px: 2, py: 2 }}
             >
-              Refresh PRs
-            </Button>
-          ) : null}
-          <Box sx={{ flex: 1 }} />
-          <Button
-            size="small"
-            color="error"
-            variant="outlined"
-            startIcon={<StopIcon />}
-            disabled={!detailJob || !canStop(detailJob) || jobActionBusy}
-            onClick={() =>
-              detailJobId && requestAction('stop', detailJobId)
-            }
-          >
-            Stop
-          </Button>
-          <Tooltip title={restartTooltip('Resume', detailJob?.resumable)}>
-            <span>
-              <Button
-                size="small"
-                variant="contained"
-                startIcon={<PlayArrowIcon />}
-                disabled={!detailJob || !canResume(detailJob) || jobActionBusy}
-                onClick={() =>
-                  detailJobId && requestAction('resume', detailJobId)
-                }
-              >
-                Resume
-              </Button>
-            </span>
-          </Tooltip>
-          <Tooltip title={restartTooltip('Re-run', detailJob?.rerunnable)}>
-            <span>
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={<ReplayIcon />}
-                disabled={!detailJob || !canRerun(detailJob) || jobActionBusy}
-                onClick={() =>
-                  detailJobId && requestAction('rerun', detailJobId)
-                }
-              >
-                Re-run
-              </Button>
-            </span>
-          </Tooltip>
-          <Tooltip
-            title={
-              detailJob && shipAlreadyDone(detailJob)
-                ? 'Already merged'
-                : integrateLabel(detailJob)
-            }
-          >
-            <span>
-              <Button
-                size="small"
-                variant="contained"
-                color="secondary"
-                startIcon={<CallMergeIcon />}
-                disabled={
-                  !detailJob ||
-                  !canCreatePr(detailJob) ||
-                  shipAlreadyDone(detailJob) ||
-                  jobActionBusy
-                }
-                onClick={() =>
-                  detailJobId && requestAction('create-pr', detailJobId)
-                }
-              >
-                {integrateLabel(detailJob)}
-              </Button>
-            </span>
-          </Tooltip>
-          <Button
-            size="small"
-            color="error"
-            startIcon={<DeleteOutlineIcon />}
-            disabled={!detailJobId || jobActionBusy}
-            onClick={() =>
-              detailJobId && requestAction('delete', detailJobId)
-            }
-          >
-            Delete
-          </Button>
-          <Button variant="contained" onClick={closeDetail}>
-            Close
-          </Button>
-        </Box>
+              {drawerTab === 'overview' ? (
+                <JobOverview
+                  job={readyJob}
+                  jobActionMsg={jobActionMsg}
+                  onNavigateDefect={closeDetail}
+                />
+              ) : null}
+            </Box>
+            <Box
+              role="tabpanel"
+              id="job-panel-evidence"
+              aria-labelledby="job-tab-evidence"
+              hidden={drawerTab !== 'evidence'}
+              sx={{ height: '100%', overflow: 'auto', px: 2, py: 2 }}
+            >
+              {drawerTab === 'evidence' ? (
+                <JobEvidence
+                  job={readyJob}
+                  onViewerChange={setDefectViewer}
+                  onNavigateDefect={closeDetail}
+                />
+              ) : null}
+            </Box>
+            <Box
+              role="tabpanel"
+              id="job-panel-log"
+              aria-labelledby="job-tab-log"
+              sx={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                px: 2,
+                py: 2,
+                visibility: drawerTab === 'log' ? 'visible' : 'hidden',
+                pointerEvents: drawerTab === 'log' ? 'auto' : 'none',
+              }}
+              aria-hidden={drawerTab === 'log' ? undefined : true}
+              inert={drawerTab === 'log' ? undefined : true}
+            >
+              <JobLogPanel
+                jobId={readyJob.jobId}
+                lines={readyJob.log || []}
+                shown={drawerTab === 'log'}
+                logBoxRef={logBoxRef}
+                logEndRef={logEndRef}
+              />
+            </Box>
+          </Box>
+        )}
       </Drawer>
 
       <Dialog

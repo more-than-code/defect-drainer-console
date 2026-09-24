@@ -115,20 +115,37 @@ export function EvidenceGallery({
                 {items.map((item, ii) => (
                   <Box
                     key={item.url}
-                    component="img"
-                    src={item.url}
-                    alt={item.alt}
+                    component="button"
+                    type="button"
+                    aria-label={`Open ${fileLabel(item.alt)}`}
                     onClick={() => setViewer(flatIndex(gi, ii))}
                     sx={{
+                      p: 0,
                       width: 96,
                       height: 96,
-                      objectFit: 'cover',
                       borderRadius: 1,
                       border: 1,
+                      borderStyle: 'solid',
                       borderColor: accentColor,
                       cursor: 'zoom-in',
+                      bgcolor: 'transparent',
+                      overflow: 'hidden',
+                      display: 'block',
+                      lineHeight: 0,
                     }}
-                  />
+                  >
+                    <Box
+                      component="img"
+                      src={item.url}
+                      alt=""
+                      sx={{
+                        width: '100%',
+                        height: '100%',
+                        objectFit: 'cover',
+                        display: 'block',
+                      }}
+                    />
+                  </Box>
                 ))}
               </Stack>
             ) : (

@@ -119,6 +119,26 @@ export type BatchJobPr = {
   kind?: 'pr' | 'merge' | string;
 };
 
+export type HarvestOutcome =
+  | 'resolved'
+  | 'regression'
+  | 'not_resolved'
+  | 'notes_only'
+  | 'no_evidence'
+  | 'error';
+
+/** One defect's result in one harvest. `images` are inventory paths this run imported. */
+export type HarvestDefect = {
+  defectId: string;
+  outcome: HarvestOutcome | string;
+  reason?: string;
+  /** e.g. "evidence/DEF-…/fix-01.png"; pass to evidenceUrl() */
+  images?: string[];
+};
+
+/** One harvest (one agent run), oldest first, last 20 kept. */
+export type HarvestRun = { at: string; defects: HarvestDefect[] };
+
 /** Live simulator-line slot. Present only while this job is waiting. */
 export type SimQueue = {
   /** 1-based FIFO position. */
@@ -167,6 +187,11 @@ export type BatchJob = {
   diffHygiene?: DiffHygieneReport;
   /** Driver-loop record, cumulative across Re-run and Resume. */
   agentRun?: AgentRun;
+  /**
+   * Harvest results, oldest first. On GET /api/batch-jobs/{id} only —
+   * GET /api/batches omits it. Absent on jobs run before harvests existed.
+   */
+  harvests?: HarvestRun[];
   /** Server-computed: may this job continue its last agent session? */
   resumable?: RestartCheck;
   /** Server-computed: may this job start a new agent session? */
