@@ -119,6 +119,14 @@ export type BatchJobPr = {
   kind?: 'pr' | 'merge' | string;
 };
 
+/** Live simulator-line slot. Present only while this job is waiting. */
+export type SimQueue = {
+  /** 1-based FIFO position. */
+  position: number;
+  /** Job id currently holding the simulator. */
+  holder: string;
+};
+
 export type BatchJob = {
   jobId: string;
   batchId: string;
@@ -128,6 +136,12 @@ export type BatchJob = {
   defect_ids: string[];
   createdAt: string;
   updatedAt?: string;
+  /** RFC3339 time this job started waiting. Kept after it runs. */
+  queuedAt?: string;
+  /** How the waiting job was submitted. Kept after it runs. */
+  queuedMode?: 'fresh' | 'rerun' | 'resume';
+  /** Set only while waiting; absent once this job holds the simulator. */
+  simQueue?: SimQueue;
   error?: string;
   log?: string[];
   batchPath?: string;

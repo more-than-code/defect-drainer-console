@@ -1045,23 +1045,35 @@ export function JobsPage() {
         flex: 0.55,
         minWidth: 72,
         maxWidth: 110,
-        renderCell: ({ value }) => (
-          <Chip
-            size="small"
-            label={String(value ?? '')}
-            color={jobStatusColor(String(value ?? ''))}
-            sx={{
-              maxWidth: '100%',
-              height: 22,
-              '& .MuiChip-label': {
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                px: 0.75,
-                fontSize: 11,
-              },
-            }}
-          />
-        ),
+        renderCell: ({ row, value }) => {
+          const label = String(value ?? '');
+          const chip = (
+            <Chip
+              size="small"
+              label={label}
+              color={jobStatusColor(label)}
+              sx={{
+                maxWidth: '100%',
+                height: 22,
+                '& .MuiChip-label': {
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  px: 0.75,
+                  fontSize: 11,
+                },
+              }}
+            />
+          );
+          const queue = row.status === 'queued' ? row.simQueue : undefined;
+          if (!queue) return chip;
+          return (
+            <Tooltip
+              title={`Waiting for the simulator: #${queue.position}, behind ${queue.holder}`}
+            >
+              {chip}
+            </Tooltip>
+          );
+        },
       },
       {
         field: 'batchId',
@@ -1536,6 +1548,18 @@ export function JobsPage() {
               {detailJob.error ? (
                 <Alert severity="warning" sx={{ py: 0 }}>
                   {detailJob.error}
+                </Alert>
+              ) : null}
+              {detailJob.simQueue ? (
+                <Alert severity="info" sx={{ py: 0 }}>
+                  {`Waiting for the simulator: #${detailJob.simQueue.position} in line, behind `}
+                  <Box
+                    component="span"
+                    sx={{ fontFamily: 'ui-monospace, Menlo, monospace' }}
+                  >
+                    {detailJob.simQueue.holder}
+                  </Box>
+                  {'. It starts on its own; Stop removes it from the line.'}
                 </Alert>
               ) : null}
               {jobActionMsg ? (
