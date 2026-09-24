@@ -32,7 +32,7 @@ cd /Users/joe/workspace/defect-drainer/console && pnpm install && pnpm dev
 
 ## Related
 
-- Umbrella: `../README.md`, `../apps/registry.json`
+- Umbrella: `../README.md`
 - Live API: `../backend-go/README.md`
 - Operator runbook: `../backend-go/docs/operating.md`
 
