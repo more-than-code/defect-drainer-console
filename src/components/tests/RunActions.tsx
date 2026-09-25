@@ -8,6 +8,7 @@ import { ConfirmDialog } from '../ConfirmDialog';
 export function RunActions({
   status,
   busy,
+  editsLocked,
   operatorMissing,
   onAdd,
   onFinish,
@@ -19,6 +20,8 @@ export function RunActions({
 }: {
   status: string;
   busy: boolean;
+  /** A live agent job owns this run. Manual writes stay disabled. */
+  editsLocked: boolean;
   operatorMissing: boolean;
   onAdd: () => void;
   onFinish: () => void;
@@ -43,12 +46,22 @@ export function RunActions({
       }}
     >
       {status === 'in_progress' ? (
-        <Button size="small" variant="outlined" disabled={busy} onClick={onAdd}>
+        <Button
+          size="small"
+          variant="outlined"
+          disabled={busy || editsLocked}
+          onClick={onAdd}
+        >
           Add step
         </Button>
       ) : null}
       {status === 'in_progress' ? (
-        <Button size="small" variant="contained" disabled={busy} onClick={onFinish}>
+        <Button
+          size="small"
+          variant="contained"
+          disabled={busy || editsLocked}
+          onClick={onFinish}
+        >
           Finish
         </Button>
       ) : null}
@@ -71,8 +84,13 @@ export function RunActions({
           </span>
         </Tooltip>
       ) : null}
-      {status === 'in_progress' || status === 'awaiting_review' ? (
-        <Button size="small" color="warning" disabled={busy} onClick={onAbandon}>
+      {status === 'in_progress' || status === 'awaiting_review' || status === 'queued' ? (
+        <Button
+          size="small"
+          color="warning"
+          disabled={busy || editsLocked}
+          onClick={onAbandon}
+        >
           Abandon
         </Button>
       ) : null}
@@ -82,7 +100,7 @@ export function RunActions({
         </Button>
       ) : null}
       <Box sx={{ flex: 1 }} />
-      <Button size="small" color="error" disabled={busy} onClick={onDelete}>
+      <Button size="small" color="error" disabled={busy || editsLocked} onClick={onDelete}>
         Delete
       </Button>
     </Box>

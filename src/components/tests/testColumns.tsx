@@ -32,9 +32,22 @@ export function runColumns(opts: {
           : 'Exploratory';
         return (
           <Box sx={{ minWidth: 0, width: '100%', py: 0.25 }}>
-            <Typography variant="body2" sx={{ ...cellTextClamp2, fontSize: 13 }}>
-              {row.title || '—'}
-            </Typography>
+            <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+              <Typography
+                variant="body2"
+                sx={{ ...cellTextClamp2, fontSize: 13, width: 'auto', flex: '1 1 auto' }}
+              >
+                {row.title || '—'}
+              </Typography>
+              {row.executor === 'dd-job' ? (
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label="Agent job"
+                  sx={{ ...compactChipSx, flexShrink: 0 }}
+                />
+              ) : null}
+            </Stack>
             <Typography variant="caption" color="text.secondary" sx={cellTextClamp2}>
               {caption}
             </Typography>

@@ -133,6 +133,12 @@ export function progressPercent(progress: TestRunProgress): number {
   return Math.round((done / progress.total) * 100);
 }
 
+/** First 7 characters. The same length the plan-history tooltip shows. */
+export function shortSha(sha: string): string {
+  const trimmed = sha.trim();
+  return trimmed.length > 7 ? trimmed.slice(0, 7) : trimmed;
+}
+
 export type RepoRefRow = { name: string; ref: string };
 
 /** One row per repo name on the app. Entry base branch, else the app base branch. */

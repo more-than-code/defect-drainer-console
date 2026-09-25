@@ -153,11 +153,17 @@ export type SimQueue = {
 
 export type BatchJob = {
   jobId: string;
-  batchId: string;
+  /** Absent on a test-run job: there is no batches row. */
+  batchId?: string;
+  /** `test_run` for an agent test job. Absent on fix jobs. */
+  kind?: string;
   status: string;
   mode: string;
   app_id: string;
-  defect_ids: string[];
+  /** Absent on a test-run job. */
+  defect_ids?: string[];
+  /** Set when `kind` is `test_run`. */
+  testRunId?: string;
   createdAt: string;
   updatedAt?: string;
   /** RFC3339 time this job started waiting. Kept after it runs. */
@@ -184,6 +190,8 @@ export type BatchJob = {
     /** local = merge into the checkout; origin = GitHub pull request. */
     baseSource?: 'local' | 'origin' | string;
   }>;
+  /** Commit each worktree was checked out at, keyed by repo name. */
+  diffBase?: Record<string, string>;
   prs?: BatchJobPr[];
   verification?: BatchJobVerification;
   /** Same commands run before the agent, so pre-existing red is attributable. */
@@ -395,6 +403,12 @@ export type TestRun = {
   updated_at: string;
   progress: TestRunProgress;
   steps?: TestRunStep[];
+};
+
+/** `POST /api/test-runs` with `execute:"agent"` — 201. */
+export type CreateTestRunResponse = {
+  run: TestRun;
+  job: BatchJob;
 };
 
 export type PlanGridPlan = {

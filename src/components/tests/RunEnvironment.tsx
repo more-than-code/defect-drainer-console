@@ -1,7 +1,7 @@
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import type { TestRun } from '../../api';
-import { accountView, envString } from './format';
+import { accountView, envString, shortSha } from './format';
 
 const FIELDS: Array<{ key: string; label: string }> = [
   { key: 'target', label: 'Target' },
@@ -42,7 +42,7 @@ export function RunEnvironment({ run }: { run: TestRun }) {
       {refs.map((ref) => (
         <Typography key={`${ref.repo}@${ref.ref}`} variant="body2">
           {ref.repo}@{ref.ref}
-          {ref.sha ? ` (${ref.sha})` : ''}
+          {ref.sha ? ` (${shortSha(ref.sha)})` : ''}
         </Typography>
       ))}
     </Stack>

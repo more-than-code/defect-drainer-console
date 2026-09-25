@@ -28,6 +28,7 @@ export function StepRow({
   runStatus,
   pasteTarget,
   busy,
+  editsLocked,
   reviewValue,
   reviewNote,
   onActivate,
@@ -44,6 +45,7 @@ export function StepRow({
   runStatus: string;
   pasteTarget: boolean;
   busy: boolean;
+  editsLocked: boolean;
   reviewValue: '' | 'accepted' | 'disputed';
   reviewNote: string;
   onActivate: () => void;
@@ -165,10 +167,10 @@ export function StepRow({
             aria-labelledby={statusId}
             value={offered ? step.status : null}
             onChange={(_event, value: string | null) => {
-              if (!value || value === step.status) return;
+              if (editsLocked || !value || value === step.status) return;
               onStatus(value);
             }}
-            disabled={busy}
+            disabled={busy || editsLocked}
           >
             {STEP_RESULT_VALUES.map((value) => (
               <ToggleButton key={value} value={value}>
@@ -183,7 +185,7 @@ export function StepRow({
             onFocus={() => setFocused(true)}
             onBlur={() => {
               setFocused(false);
-              if (actual === step.actual) return;
+              if (editsLocked || actual === step.actual) return;
               const draft = actual;
               pendingActual.current = draft;
               void onActual(draft).then((ok) => {
@@ -196,14 +198,14 @@ export function StepRow({
             fullWidth
             multiline
             minRows={2}
-            disabled={busy && !focused}
+            disabled={editsLocked || (busy && !focused)}
             slotProps={{ htmlInput: { maxLength: 4000 } }}
           />
           <Button
             component="label"
             size="small"
             startIcon={<AddPhotoAlternateIcon />}
-            disabled={busy}
+            disabled={busy || editsLocked}
           >
             Add screenshots
             <input
@@ -211,10 +213,12 @@ export function StepRow({
               type="file"
               accept="image/*"
               multiple
+              disabled={busy || editsLocked}
               onChange={(e) => {
                 const list = e.target.files ? Array.from(e.target.files) : [];
                 e.target.value = '';
-                if (list.length) onFiles(list);
+                if (editsLocked || !list.length) return;
+                onFiles(list);
               }}
             />
           </Button>

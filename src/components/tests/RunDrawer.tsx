@@ -3,10 +3,12 @@ import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import Drawer from '@mui/material/Drawer';
 import IconButton from '@mui/material/IconButton';
+import Link from '@mui/material/Link';
 import Stack from '@mui/material/Stack';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 import { api, type FileDefectResponse, type TestPlan, type TestRun } from '../../api';
 import { getOperatorName } from '../../operator';
 import { absoluteLocal, relativeTime } from '../../relativeTime';
@@ -21,6 +23,43 @@ import { SaveAsPlanDialog } from './SaveAsPlanDialog';
 type ReviewChoice = '' | 'accepted' | 'disputed';
 type ReviewDraft = Record<string, { review: ReviewChoice; note: string }>;
 type ConfirmKind = 'finish' | 'abandon' | 'delete' | null;
+
+function agentJobLiveWatch(run: TestRun | null): boolean {
+  return Boolean(
+    run &&
+      run.executor === 'dd-job' &&
+      run.job_id &&
+      (run.status === 'queued' || run.status === 'in_progress'),
+  );
+}
+
+type JobLiveRead =
+  | { ok: true; live: boolean }
+  | { ok: false; missing: true }
+  | { ok: false; missing: false; message: string };
+
+/** 404 is not live. Any other failure leaves the caller on its previous answer. */
+async function readJobLive(jobId: string): Promise<JobLiveRead> {
+  let res: Response;
+  try {
+    res = await fetch(`/api/batch-jobs/${encodeURIComponent(jobId)}`);
+  } catch (e) {
+    return { ok: false, missing: false, message: errorMessage(e) };
+  }
+  if (res.status === 404) return { ok: false, missing: true };
+  const data = (await res.json().catch(() => ({}))) as {
+    job?: { status?: string };
+    error?: string;
+  };
+  if (!res.ok) {
+    return { ok: false, missing: false, message: data.error || res.statusText };
+  }
+  if (!data.job) {
+    return { ok: false, missing: false, message: 'Job was not returned.' };
+  }
+  const status = data.job.status ?? '';
+  return { ok: true, live: status === 'queued' || status === 'running' };
+}
 
 export function RunDrawer({
   runId,
@@ -38,6 +77,9 @@ export function RunDrawer({
   onNotice: (message: string) => void;
 }) {
   const [run, setRun] = useState<TestRun | null>(null);
+  const [jobWatchFor, setJobWatchFor] = useState('');
+  const [jobLive, setJobLive] = useState<boolean | null>(null);
+  const [jobPollError, setJobPollError] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [actionError, setActionError] = useState('');
@@ -70,7 +112,16 @@ export function RunDrawer({
   const runStateRef = useRef<TestRun | null>(null);
   const busyRef = useRef(false);
   const draftRun = useRef<string | null>(null);
+  const jobReadGen = useRef(0);
+  const jobInFlight = useRef<{ jobId: string; gen: number; token: number } | null>(null);
   runStateRef.current = run;
+  const jobWatchKey = agentJobLiveWatch(run) ? `${run?.id}\0${run?.job_id}` : '';
+  if (jobWatchFor !== jobWatchKey) {
+    setJobWatchFor(jobWatchKey);
+    setJobLive(jobWatchKey ? null : false);
+    setJobPollError('');
+  }
+  const agentLocked = jobWatchKey !== '' && jobLive !== false;
 
   const applyViewer = useCallback((key: string, open: boolean) => {
     setOpenViewers((prev) => {
@@ -134,6 +185,45 @@ export function RunDrawer({
     })();
   }, [runId, seed]);
 
+  const applyJobLive = useCallback((result: JobLiveRead) => {
+    if (!result.ok) {
+      if (result.missing) {
+        setJobLive(false);
+        setJobPollError('');
+      } else {
+        setJobPollError(result.message);
+      }
+      return;
+    }
+    setJobLive(result.live);
+    setJobPollError('');
+  }, []);
+
+  // One generation per job read. A newer read bumps the token, so a slower
+  // older response cannot paint over it. A second read of the same job id
+  // does not start while that generation is still in flight.
+  const pollJob = useCallback(
+    async (runRecordId: string, jobId: string) => {
+      const flight = jobInFlight.current;
+      if (flight && flight.jobId === jobId && flight.token === readToken.current) return;
+      const gen = ++jobReadGen.current;
+      const token = ++readToken.current;
+      jobInFlight.current = { jobId, gen, token };
+      try {
+        const result = await readJobLive(jobId);
+        if (gen !== jobReadGen.current) return;
+        if (readToken.current !== token || busyRef.current) return;
+        if (runIdRef.current !== runRecordId) return;
+        const current = runStateRef.current;
+        if (!current || current.job_id !== jobId || !agentJobLiveWatch(current)) return;
+        applyJobLive(result);
+      } finally {
+        if (jobInFlight.current?.gen === gen) jobInFlight.current = null;
+      }
+    },
+    [applyJobLive],
+  );
+
   const refresh = useCallback(async (id: string) => {
     if (busyRef.current) return;
     const token = ++readToken.current;
@@ -145,17 +235,42 @@ export function RunDrawer({
       runStateRef.current = res.run;
       setRun(res.run);
       setPollError('');
+      if (!agentJobLiveWatch(res.run) || !res.run.job_id) {
+        jobReadGen.current += 1;
+        jobInFlight.current = null;
+        setJobLive(false);
+        setJobPollError('');
+        return;
+      }
+      await pollJob(id, res.run.job_id);
     } catch (e) {
       if (runIdRef.current !== id || readToken.current !== token) return;
       setPollError(errorMessage(e));
     }
-  }, []);
+  }, [pollJob]);
 
   useEffect(() => {
-    if (!runId || run?.id !== runId || run.status !== 'in_progress') return;
+    if (!runId || run?.id !== runId) return;
+    if (run.status !== 'in_progress' && run.status !== 'queued') return;
     const timer = window.setInterval(() => void refresh(runId), 3000);
     return () => window.clearInterval(timer);
   }, [runId, run?.id, run?.status, refresh]);
+
+  // One read when the watched job changes, so the lock does not wait out the run
+  // poll's first 3s. Later reads ride that poll. pollJob drops a stale generation.
+  useEffect(() => {
+    if (!jobWatchKey || !run?.job_id || run.id !== runId) return;
+    const id = run.id;
+    const jobId = run.job_id;
+    let cancelled = false;
+    void (async () => {
+      if (cancelled) return;
+      await pollJob(id, jobId);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [jobWatchKey, pollJob, run?.id, run?.job_id, runId]);
 
   useEffect(() => {
     if (!runId) return;
@@ -188,7 +303,11 @@ export function RunDrawer({
   );
 
   useEffect(() => {
-    if (!runId || run?.status !== 'in_progress') return;
+    if (agentLocked) setPasteTarget(null);
+  }, [agentLocked]);
+
+  useEffect(() => {
+    if (!runId || run?.status !== 'in_progress' || agentLocked) return;
     const onPaste = (event: ClipboardEvent) => {
       const items = event.clipboardData?.items;
       if (!items) return;
@@ -209,10 +328,10 @@ export function RunDrawer({
     };
     window.addEventListener('paste', onPaste);
     return () => window.removeEventListener('paste', onPaste);
-  }, [pasteTarget, run?.status, runId, upload]);
+  }, [agentLocked, pasteTarget, run?.status, runId, upload]);
 
   async function patchStep(key: string, body: { status?: string; actual?: string }) {
-    if (!runId) return false;
+    if (!runId || agentLocked) return false;
     try {
       await writeRun(runId, () =>
         api<{ run: TestRun }>(
@@ -228,6 +347,7 @@ export function RunDrawer({
 
   async function addStep(event: React.FormEvent) {
     event.preventDefault();
+    if (agentLocked) return;
     if (!runId || !addAction.trim()) {
       setActionError('An exploratory step needs an action.');
       return;
@@ -255,7 +375,7 @@ export function RunDrawer({
   }
 
   async function finish() {
-    if (!runId) return;
+    if (!runId || agentLocked) return;
     setConfirm(null);
     try {
       await writeRun(runId, () =>
@@ -270,7 +390,7 @@ export function RunDrawer({
   }
 
   async function abandon() {
-    if (!runId) return;
+    if (!runId || agentLocked) return;
     setConfirm(null);
     try {
       await writeRun(runId, () =>
@@ -285,7 +405,7 @@ export function RunDrawer({
   }
 
   async function remove() {
-    if (!runId) return;
+    if (!runId || agentLocked) return;
     const id = runId;
     const wipe = deleteEvidence;
     setConfirm(null);
@@ -396,6 +516,18 @@ export function RunDrawer({
           {run ? (
             <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center" sx={{ mt: 0.75 }}>
               <Chip size="small" label={runStatusLabel(run.status)} color={runStatusColor(run.status)} sx={compactChipSx} />
+              {run.executor === 'dd-job' ? (
+                <Chip size="small" variant="outlined" label="Agent job" sx={compactChipSx} />
+              ) : null}
+              {run.executor === 'dd-job' && run.job_id ? (
+                <Link
+                  component={RouterLink}
+                  to={`/jobs?job=${encodeURIComponent(run.job_id)}`}
+                  variant="caption"
+                >
+                  Open job
+                </Link>
+              ) : null}
               <Typography variant="caption" sx={{ fontFamily: 'ui-monospace, Menlo, monospace' }}>
                 {run.id}
               </Typography>
@@ -417,6 +549,7 @@ export function RunDrawer({
           <RunActions
             status={run.status}
             busy={busy}
+            editsLocked={agentLocked}
             operatorMissing={!operator}
             onAdd={() => setAddOpen(true)}
             onFinish={() => setConfirm('finish')}
@@ -446,8 +579,10 @@ export function RunDrawer({
           run={run}
           mode={mode}
           actionError={actionError}
-          pollError={pollError}
+          pollError={pollError || jobPollError}
           infoMessage={infoMessage}
+          liveJobId={agentLocked && run?.job_id ? run.job_id : null}
+          editsLocked={agentLocked}
           operatorMissing={!operator}
           pasteTarget={pasteTarget}
           busy={busy}
@@ -462,12 +597,12 @@ export function RunDrawer({
           onAddSubmit={(event) => void addStep(event)}
           onAddCancel={() => setAddOpen(false)}
           onActivate={(step) => {
-            if (mode === 'edit') setPasteTarget(step.key);
+            if (mode === 'edit' && !agentLocked) setPasteTarget(step.key);
           }}
           onStatus={(key, value) => void patchStep(key, { status: value })}
           onActual={(key, actual) => patchStep(key, { actual })}
           onFiles={(key, files) => {
-            if (runId) void upload(runId, key, files);
+            if (runId && !agentLocked) void upload(runId, key, files);
           }}
           onReview={(key, review) =>
             setReviewDraft((prev) => ({
@@ -493,7 +628,7 @@ export function RunDrawer({
         onAbandon={() => void abandon()}
         onDelete={() => void remove()}
         onCancel={() => setConfirm(null)}
-        confirmDisabled={busy}
+        confirmDisabled={busy || agentLocked}
       />
       <SaveAsPlanDialog
         open={saveOpen}

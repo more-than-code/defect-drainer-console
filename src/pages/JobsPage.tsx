@@ -25,6 +25,7 @@ import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import IconButton from '@mui/material/IconButton';
+import Link from '@mui/material/Link';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
@@ -108,6 +109,10 @@ function manifestStatusColor(
   if (status === 'failed') return 'error';
   if (status === 'cancelled') return 'warning';
   return 'default';
+}
+
+function isTestRunJob(job: { kind?: string } | null | undefined): boolean {
+  return job?.kind === 'test_run';
 }
 
 function canStop(j: BatchJob) {
@@ -862,6 +867,14 @@ function DefectOutcomeList({
   );
 }
 
+function detachedCheckout(baseRef: string | undefined, sha: string | undefined): string {
+  const ref = baseRef?.trim() || '';
+  const raw = sha?.trim() || '';
+  const sha7 = raw.length > 7 ? raw.slice(0, 7) : raw;
+  const core = ref && sha7 ? `${ref} @ ${sha7}` : ref || sha7;
+  return core ? `${core} (detached)` : '(detached)';
+}
+
 function WorktreeSection({ job }: { job: BatchJob }) {
   const trees = job.worktrees || [];
   if (!trees.length) return null;
@@ -883,31 +896,37 @@ function WorktreeSection({ job }: { job: BatchJob }) {
       </AccordionSummary>
       <AccordionDetails>
         <Stack spacing={1}>
-          {trees.map((w) => (
-            <Box key={`${w.repo}-${w.branch}`}>
-              <Typography variant="body2">{w.repo}</Typography>
-              {(
-                [
+          {trees.map((w) => {
+            const rows: Array<[string, string]> = w.branch
+              ? [
                   ['Base branch', w.baseBranch || 'not recorded'],
                   ['Job branch', w.branch],
                   ['Worktree', w.worktreeAbs],
-                ] as const
-              ).map(([label, value]) => (
-                <Typography
-                  key={label}
-                  variant="caption"
-                  component="div"
-                  color="text.secondary"
-                  sx={{
-                    fontFamily: 'ui-monospace, Menlo, monospace',
-                    wordBreak: 'break-all',
-                  }}
-                >
-                  {label}: {value}
-                </Typography>
-              ))}
-            </Box>
-          ))}
+                ]
+              : [
+                  ['Checked out', detachedCheckout(w.baseRef, job.diffBase?.[w.repo])],
+                  ['Worktree', w.worktreeAbs],
+                ];
+            return (
+              <Box key={`${w.repo}\0${w.worktreeAbs}`}>
+                <Typography variant="body2">{w.repo}</Typography>
+                {rows.map(([label, value]) => (
+                  <Typography
+                    key={label}
+                    variant="caption"
+                    component="div"
+                    color="text.secondary"
+                    sx={{
+                      fontFamily: 'ui-monospace, Menlo, monospace',
+                      wordBreak: 'break-all',
+                    }}
+                  >
+                    {label}: {value}
+                  </Typography>
+                ))}
+              </Box>
+            );
+          })}
         </Stack>
       </AccordionDetails>
     </Accordion>
@@ -995,7 +1014,9 @@ function JobOverview({
         </Alert>
       ) : null}
       {job.agentRun ? <RunSummary run={job.agentRun} /> : null}
-      <DefectOutcomeList job={job} onNavigate={onNavigateDefect} />
+      {isTestRunJob(job) ? null : (
+        <DefectOutcomeList job={job} onNavigate={onNavigateDefect} />
+      )}
       {job.verification?.ran ? (
         <VerificationPanel v={job.verification} baseline={job.baseline} />
       ) : null}
@@ -1487,7 +1508,8 @@ function DrawerActionBar({
     setAnchor(null);
   }
   const closeMenu = () => setAnchor(null);
-  const showRefreshPrs = !!job && integrateMode(job) !== 'merge';
+  const testRun = isTestRunJob(job);
+  const showRefreshPrs = !!job && !testRun && integrateMode(job) !== 'merge';
   return (
     <Box
       sx={{
@@ -1538,22 +1560,24 @@ function DrawerActionBar({
           </Button>
         </span>
       </Tooltip>
-      <Tooltip
-        title={job && shipAlreadyDone(job) ? 'Already merged' : integrateLabel(job)}
-      >
-        <span>
-          <Button
-            size="small"
-            variant="contained"
-            color="secondary"
-            startIcon={<CallMergeIcon />}
-            disabled={!job || !canCreatePr(job) || shipAlreadyDone(job) || busy}
-            onClick={onIntegrate}
-          >
-            {integrateLabel(job)}
-          </Button>
-        </span>
-      </Tooltip>
+      {testRun ? null : (
+        <Tooltip
+          title={job && shipAlreadyDone(job) ? 'Already merged' : integrateLabel(job)}
+        >
+          <span>
+            <Button
+              size="small"
+              variant="contained"
+              color="secondary"
+              startIcon={<CallMergeIcon />}
+              disabled={!job || !canCreatePr(job) || shipAlreadyDone(job) || busy}
+              onClick={onIntegrate}
+            >
+              {integrateLabel(job)}
+            </Button>
+          </span>
+        </Tooltip>
+      )}
       <Box sx={{ flex: 1 }} />
       <Tooltip title="More actions">
         <IconButton
@@ -1819,6 +1843,7 @@ export function JobsPage() {
         setDetailJob(job);
         // Missing ghState or stale (>2 min): poll GitHub
         const needsGh =
+          !isTestRunJob(job) &&
           canRefreshPrs(job) &&
           ((job.prs || []).some((p) => isTrackablePr(p) && !p.ghState) ||
             prsStale(job.prs));
@@ -1904,6 +1929,10 @@ export function JobsPage() {
 
   const requestAction = useCallback(
     (action: JobAction, jobId: string) => {
+      const job =
+        batchJobs.find((j) => j.jobId === jobId) ||
+        (detailJob?.jobId === jobId ? detailJob : null);
+      if (action === 'create-pr' && isTestRunJob(job)) return;
       setActionTargetId(jobId);
       setPendingAction(action);
       clearShip();
@@ -1922,9 +1951,6 @@ export function JobsPage() {
         return;
       }
       if (action !== 'create-pr') return;
-      const job =
-        batchJobs.find((j) => j.jobId === jobId) ||
-        (detailJob?.jobId === jobId ? detailJob : null);
       if (integrateMode(job) === 'pr') return;
       shipPreviewFor.current = jobId;
       setShipLoading(true);
@@ -2022,7 +2048,8 @@ export function JobsPage() {
       rows = rows.filter((j) => {
         const hay = [
           j.jobId,
-          j.batchId,
+          j.batchId || '',
+          j.testRunId || '',
           j.mode,
           j.status,
           ...(j.defect_ids || []),
@@ -2202,17 +2229,58 @@ export function JobsPage() {
         headerName: 'Batch',
         flex: 0.5,
         minWidth: 64,
-        renderCell: ({ row }) => (
-          <Tooltip title={row.batchId}>
-            <Typography
-              variant="body2"
-              fontWeight={600}
-              sx={{ ...cellTextClamp2, fontSize: 12 }}
-            >
-              …{shortBatchId(row.batchId)}
-            </Typography>
-          </Tooltip>
-        ),
+        valueGetter: (_v, row) =>
+          isTestRunJob(row) ? row.testRunId || '' : row.batchId || '',
+        renderCell: ({ row }) => {
+          if (isTestRunJob(row)) {
+            const id = row.testRunId || '';
+            return (
+              <Stack
+                direction="row"
+                spacing={0.5}
+                alignItems="center"
+                useFlexGap
+                flexWrap="wrap"
+                sx={{ minWidth: 0, width: '100%', py: 0.25 }}
+              >
+                <Tooltip title={id || row.jobId}>
+                  <Typography
+                    variant="body2"
+                    fontWeight={600}
+                    sx={{ ...cellTextClamp2, fontSize: 12, width: 'auto', flex: '1 1 auto' }}
+                  >
+                    {id || '—'}
+                  </Typography>
+                </Tooltip>
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label="test run"
+                  sx={{ height: 22, fontSize: 11, flexShrink: 0 }}
+                />
+              </Stack>
+            );
+          }
+          const batchId = row.batchId || '';
+          if (!batchId) {
+            return (
+              <Typography variant="caption" color="text.secondary">
+                —
+              </Typography>
+            );
+          }
+          return (
+            <Tooltip title={batchId}>
+              <Typography
+                variant="body2"
+                fontWeight={600}
+                sx={{ ...cellTextClamp2, fontSize: 12 }}
+              >
+                …{shortBatchId(batchId)}
+              </Typography>
+            </Tooltip>
+          );
+        },
       },
       {
         field: 'jobId',
@@ -2454,25 +2522,27 @@ export function JobsPage() {
                 </IconButton>
               </span>
             </Tooltip>
-            <Tooltip
-              title={
-                shipAlreadyDone(row) ? 'Already merged' : integrateLabel(row)
-              }
-            >
-              <span>
-                <IconButton
-                  size="small"
-                  color="secondary"
-                  aria-label={`${integrateLabel(row)} ${row.jobId}`}
-                  disabled={
-                    !canCreatePr(row) || shipAlreadyDone(row) || jobActionBusy
-                  }
-                  onClick={() => requestAction('create-pr', row.jobId)}
-                >
-                  <CallMergeIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
+            {isTestRunJob(row) ? null : (
+              <Tooltip
+                title={
+                  shipAlreadyDone(row) ? 'Already merged' : integrateLabel(row)
+                }
+              >
+                <span>
+                  <IconButton
+                    size="small"
+                    color="secondary"
+                    aria-label={`${integrateLabel(row)} ${row.jobId}`}
+                    disabled={
+                      !canCreatePr(row) || shipAlreadyDone(row) || jobActionBusy
+                    }
+                    onClick={() => requestAction('create-pr', row.jobId)}
+                  >
+                    <CallMergeIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
             <Tooltip title="Delete">
               <IconButton
                 size="small"
@@ -2509,6 +2579,9 @@ export function JobsPage() {
   // List rows omit harvests. Header and actions can use them; tab bodies wait
   // for the detail payload so a missing harvest record is not a flicker.
   const drawerJob = readyJob ?? listedJob;
+  const testRunDrawer = isTestRunJob(drawerJob);
+  const shownTab: DrawerTab =
+    testRunDrawer && drawerTab === 'evidence' ? 'overview' : drawerTab;
 
   return (
     <ListPage
@@ -2636,11 +2709,17 @@ export function JobsPage() {
             <Typography
               variant="h6"
               noWrap
-              title={drawerJob?.batchId || undefined}
+              title={
+                isTestRunJob(drawerJob)
+                  ? drawerJob?.testRunId || undefined
+                  : drawerJob?.batchId || undefined
+              }
               sx={{ flex: 1, minWidth: 0 }}
             >
-              {drawerJob?.batchId ||
-                (detailLoading ? 'Loading…' : detailJobId || 'Job')}
+              {isTestRunJob(drawerJob)
+                ? drawerJob?.testRunId || drawerJob?.jobId || 'Test run'
+                : drawerJob?.batchId ||
+                  (detailLoading ? 'Loading…' : detailJobId || 'Job')}
             </Typography>
             <IconButton aria-label="Close" onClick={closeDetail}>
               <CloseIcon />
@@ -2690,6 +2769,17 @@ export function JobsPage() {
                   created {relativeTime(drawerJob.createdAt, now)}
                 </Typography>
               ) : null}
+              {isTestRunJob(drawerJob) && drawerJob.testRunId ? (
+                <Typography variant="body2" sx={{ flexBasis: '100%' }}>
+                  Test run {drawerJob.testRunId}{' '}
+                  <Link
+                    component={RouterLink}
+                    to={`/tests?run=${encodeURIComponent(drawerJob.testRunId)}`}
+                  >
+                    Open run
+                  </Link>
+                </Typography>
+              ) : null}
             </Stack>
           ) : null}
         </Box>
@@ -2709,9 +2799,9 @@ export function JobsPage() {
         />
         <ActionReasons job={drawerJob} />
         <Tabs
-          value={drawerTab}
+          value={shownTab}
           onChange={(_event, value) => {
-            if (value === 'overview' || value === 'evidence' || value === 'log') {
+            if (value === 'overview' || value === 'log' || (value === 'evidence' && !testRunDrawer)) {
               if (detailJobId) tabPickedFor.current = detailJobId;
               setDrawerTab(value);
             }
@@ -2732,13 +2822,15 @@ export function JobsPage() {
             aria-controls="job-panel-overview"
             sx={{ minHeight: 40 }}
           />
-          <Tab
-            label="Evidence"
-            value="evidence"
-            id="job-tab-evidence"
-            aria-controls="job-panel-evidence"
-            sx={{ minHeight: 40 }}
-          />
+          {testRunDrawer ? null : (
+            <Tab
+              label="Evidence"
+              value="evidence"
+              id="job-tab-evidence"
+              aria-controls="job-panel-evidence"
+              sx={{ minHeight: 40 }}
+            />
+          )}
           <Tab
             label="Log"
             value="log"
@@ -2750,8 +2842,8 @@ export function JobsPage() {
         {!readyJob ? (
           <Box
             role="tabpanel"
-            id={`job-panel-${drawerTab}`}
-            aria-labelledby={`job-tab-${drawerTab}`}
+            id={`job-panel-${shownTab}`}
+            aria-labelledby={`job-tab-${shownTab}`}
             sx={{ flex: 1, overflow: 'auto', px: 2, py: 2 }}
           >
             {detailLoading ? (
@@ -2787,10 +2879,10 @@ export function JobsPage() {
               role="tabpanel"
               id="job-panel-overview"
               aria-labelledby="job-tab-overview"
-              hidden={drawerTab !== 'overview'}
+              hidden={shownTab !== 'overview'}
               sx={{ height: '100%', overflow: 'auto', px: 2, py: 2 }}
             >
-              {drawerTab === 'overview' ? (
+              {shownTab === 'overview' ? (
                 <JobOverview
                   job={readyJob}
                   jobActionMsg={jobActionMsg}
@@ -2802,10 +2894,10 @@ export function JobsPage() {
               role="tabpanel"
               id="job-panel-evidence"
               aria-labelledby="job-tab-evidence"
-              hidden={drawerTab !== 'evidence'}
+              hidden={shownTab !== 'evidence'}
               sx={{ height: '100%', overflow: 'auto', px: 2, py: 2 }}
             >
-              {drawerTab === 'evidence' ? (
+              {shownTab === 'evidence' && !testRunDrawer ? (
                 <JobEvidence
                   job={readyJob}
                   onViewerChange={setDefectViewer}
@@ -2824,16 +2916,16 @@ export function JobsPage() {
                 flexDirection: 'column',
                 px: 2,
                 py: 2,
-                visibility: drawerTab === 'log' ? 'visible' : 'hidden',
-                pointerEvents: drawerTab === 'log' ? 'auto' : 'none',
+                visibility: shownTab === 'log' ? 'visible' : 'hidden',
+                pointerEvents: shownTab === 'log' ? 'auto' : 'none',
               }}
-              aria-hidden={drawerTab === 'log' ? undefined : true}
-              inert={drawerTab === 'log' ? undefined : true}
+              aria-hidden={shownTab === 'log' ? undefined : true}
+              inert={shownTab === 'log' ? undefined : true}
             >
               <JobLogPanel
                 jobId={readyJob.jobId}
                 lines={readyJob.log || []}
-                shown={drawerTab === 'log'}
+                shown={shownTab === 'log'}
                 logBoxRef={logBoxRef}
                 logEndRef={logEndRef}
               />

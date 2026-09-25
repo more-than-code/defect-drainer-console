@@ -192,7 +192,7 @@ export function DefectsPage() {
           if (!map[did]) map[did] = [];
           map[did]!.push({
             jobId: j.jobId,
-            batchId: j.batchId,
+            batchId: j.batchId ?? '',
             status: j.status,
             prs: j.prs || [],
           });
@@ -519,7 +519,7 @@ export function DefectsPage() {
                   variant="outlined"
                   color="primary"
                   label={j.status}
-                  title={`${j.jobId} · ${j.batchId}`}
+                  title={j.batchId ? `${j.jobId} · ${j.batchId}` : j.jobId}
                   onClick={(e) => {
                     e.stopPropagation();
                     navigate(`/jobs?job=${encodeURIComponent(j.jobId)}`);
@@ -928,7 +928,7 @@ export function DefectsPage() {
                         size="small"
                         color="primary"
                         variant="outlined"
-                        label={`${j.batchId.slice(-6)} · ${j.status}`}
+                        label={`${(j.batchId || j.jobId).slice(-6)} · ${j.status}`}
                         title={j.jobId}
                         onClick={() =>
                           navigate(`/jobs?job=${encodeURIComponent(j.jobId)}`)

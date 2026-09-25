@@ -24,6 +24,8 @@ export function RunDetail({
   actionError,
   pollError,
   infoMessage,
+  liveJobId,
+  editsLocked,
   operatorMissing,
   pasteTarget,
   busy,
@@ -54,6 +56,9 @@ export function RunDetail({
   actionError: string;
   pollError: string;
   infoMessage: string;
+  /** Set while an agent job is executing this run. The id links to the job. */
+  liveJobId: string | null;
+  editsLocked: boolean;
   operatorMissing: boolean;
   pasteTarget: string | null;
   busy: boolean;
@@ -85,6 +90,15 @@ export function RunDetail({
       {missing ? <Typography color="text.secondary">Run not found.</Typography> : null}
       {run ? (
         <Stack spacing={2}>
+          {liveJobId ? (
+            <Alert severity="info">
+              Being executed by job{' '}
+              <Link component={RouterLink} to={`/jobs?job=${encodeURIComponent(liveJobId)}`}>
+                {liveJobId}
+              </Link>
+              . Stop the job to edit this run by hand.
+            </Alert>
+          ) : null}
           {actionError ? <Alert severity="error">{actionError}</Alert> : null}
           {pollError ? <Alert severity="warning">{pollError}</Alert> : null}
           {infoMessage ? <Alert severity="info">{infoMessage}</Alert> : null}
@@ -97,7 +111,7 @@ export function RunDetail({
               before submitting a review.
             </Alert>
           ) : null}
-          {mode === 'edit' ? (
+          {mode === 'edit' && !editsLocked ? (
             <Typography variant="caption" color="text.secondary">
               Click a step, then paste screenshots. The paste target is outlined and labelled.
             </Typography>
@@ -121,7 +135,7 @@ export function RunDetail({
           {run.review_note ? (
             <Typography variant="body2">Review note: {run.review_note}</Typography>
           ) : null}
-          {addOpen && mode === 'edit' ? (
+          {addOpen && mode === 'edit' && !editsLocked ? (
             <Box component="form" onSubmit={onAddSubmit}>
               <Stack spacing={1}>
                 <Typography variant="subtitle2">Add exploratory step</Typography>
@@ -168,6 +182,7 @@ export function RunDetail({
               runStatus={run?.status ?? ''}
               pasteTarget={pasteTarget === step.key}
               busy={busy}
+              editsLocked={editsLocked}
               reviewValue={reviewDraft[step.key]?.review ?? ''}
               reviewNote={reviewDraft[step.key]?.note ?? ''}
               onActivate={() => onActivate(step)}
