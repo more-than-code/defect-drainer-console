@@ -235,7 +235,7 @@ export function planColumns(opts: {
       field: 'actions',
       headerName: 'Actions',
       flex: opts.narrow ? 1.4 : 1.2,
-      minWidth: opts.narrow ? 220 : 268,
+      minWidth: 220,
       sortable: false,
       filterable: false,
       renderCell: ({ row }) => (
@@ -278,6 +278,24 @@ export function planColumns(opts: {
           >
             History
           </Button>
+          <Tooltip
+            title="Download as Markdown for people and coding agents"
+            describeChild
+          >
+            <Button
+              size="small"
+              component="a"
+              href={`/api/test-plans/${encodeURIComponent(row.id)}/export`}
+              download
+              aria-label={`Export ${row.title.trim() || row.key}`}
+              onClick={(event) => {
+                event.stopPropagation();
+              }}
+              sx={{ minWidth: 0, px: 0.75 }}
+            >
+              Export
+            </Button>
+          </Tooltip>
           <Button
             size="small"
             color="error"
